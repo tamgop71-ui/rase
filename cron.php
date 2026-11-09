@@ -1,12 +1,8 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/bot.php';
 
 $pdo = getDB();
-
-// Очистка логов старше 30 дней
-$stmt = $pdo->prepare("DELETE FROM bot_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 30 DAY)");
-$stmt->execute();
-
-echo "Cron completed. Deleted old logs: " . $stmt->rowCount() . PHP_EOL;
+processTimers($pdo);
+echo "Cron executed successfully at " . date('Y-m-d H:i:s') . PHP_EOL;

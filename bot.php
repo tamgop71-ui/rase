@@ -2,8 +2,10 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/commands.php';
 
-// Защита от повторной отправки одного и того же события от ВК
+// Защита от повторных запросов Callback API ВК
 if (isset($_SERVER['HTTP_X_RETRY_COUNTER'])) {
     exit('ok');
 }
@@ -18,44 +20,135 @@ if (!isset($data['type'])) {
     exit('Invalid JSON');
 }
 
-// Проверка секретного ключа Callback API
-if (!empty(VK_SECRET_KEY) && ($data['secret'] ?? '') !== VK_SECRET_KEY) {
+// Проверка секретного ключа, если он задан
+if (VK_SECRET_KEY !== '' && ($data['secret'] ?? '') !== VK_SECRET_KEY) {
     exit('Invalid Secret Key');
 }
 
-// Подтверждение сервера
+// 1. Подтверждение адреса сервера Callback API
 if ($data['type'] === 'confirmation') {
     exit(VK_CONFIRMATION_TOKEN);
 }
 
-// Обработка нового сообщения
+// 2. Обработка входящего сообщения / события беседы
 if ($data['type'] === 'message_new') {
     $msg    = $data['object']['message'] ?? [];
     $peerId = (int)($msg['peer_id'] ?? 0);
     $fromId = (int)($msg['from_id'] ?? 0);
     $text   = trim((string)($msg['text'] ?? ''));
+    $cmid   = (int)($msg['conversation_message_id'] ?? 0);
 
-    // Игнорируем сообщения от сообществ
-    if ($fromId <= 0 || $text === '') {
+    // Игнорируем сообщения от других сообществ
+    if ($fromId <= 0 || $peerId <= 0) {
         exit('ok');
     }
 
     $pdo = getDB();
 
-    // Получаем или создаем профиль пользователя в БД
-    $user = getOrCreateUser($pdo, $fromId);
+    // Проверка на вложения (стикеры)
+    $hasSticker = false;
+    if (!empty($msg['attachments'])) {
+        foreach ($msg['attachments'] as $att) {
+            if (($att['type'] ?? '') === 'sticker') {
+                $hasSticker = true;
+                break;
+            }
+        }
+    }
 
-    // Если пользователь забанен в боте — игнорируем команды
-    if ((int)$user['is_banned'] === 1) {
+    // Регистрируем / обновляем профиль игрока и участника беседы
+    $ctx = ensureUserAndMember($pdo, $peerId, $fromId, $text, $hasSticker);
+    $isSuper = ((int)$ctx['global']['is_superadmin'] === 1) || hasSuperAccess($pdo, $fromId);
+    $myPriority = $isSuper ? 100 : (int)$ctx['member']['role_priority'];
+
+    // 2.1. Обработка системных событий беседы (Вход нового участника — приветствие и проверка бана)
+    if (!empty($msg['action']['type'])) {
+        $actType = $msg['action']['type'];
+        $actMemberId = (int)($msg['action']['member_id'] ?? 0);
+
+        if (($actType === 'chat_invite_user' || $actType === 'chat_invite_user_by_link') && $actMemberId > 0) {
+            ensureUserAndMember($pdo, $peerId, $actMemberId);
+
+            // Проверяем, нет ли у вошедшего активного бана в этой беседе или глобального бана
+            $stmtBan = $pdo->prepare("SELECT * FROM bot_punishments WHERE (peer_id = ? OR peer_id = 0) AND target_vk_id = ? AND type IN ('ban','gban') AND is_active = 1 AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1");
+            $stmtBan->execute([$peerId, $actMemberId]);
+            $activeBan = $stmtBan->fetch();
+
+            if ($activeBan && $peerId > 2000000000) {
+                $uBanned = formatUserMention($pdo, $peerId, $actMemberId);
+                sendMessage($peerId, "🚫 Пользователь {$uBanned} находится в списке заблокированных (Причина: {$activeBan['reason']}) и исключается из беседы.");
+                vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $actMemberId]);
+                exit('ok');
+            }
+
+            // Приветствие нового участника (!welcome)
+            $welcome = trim((string)($ctx['chat']['welcome_text'] ?? ''));
+            if ($welcome !== '') {
+                $uNew = formatUserMention($pdo, $peerId, $actMemberId);
+                sendMessage($peerId, "👋 {$uNew}, " . $welcome);
+            }
+        }
         exit('ok');
     }
 
-    // Разбор команды (префиксы: /, !)
-    if (preg_match('/^[\/!]([\wа-яё]+)(?:\s+(.*))?$/iu', $text, $matches)) {
-        $command = mb_strtolower($matches[1]);
-        $args    = trim($matches[2] ?? '');
+    // 2.2. Прослушка беседы (!listen): пересылка сообщения в ЛС супер-админу
+    if (!empty($ctx['chat']['listen_target_vk_id']) && !empty($ctx['chat']['listen_until'])) {
+        if (strtotime($ctx['chat']['listen_until']) > time()) {
+            $listenerId = (int)$ctx['chat']['listen_target_vk_id'];
+            if ($listenerId > 0 && $listenerId !== $fromId) {
+                $uSender = formatUserMention($pdo, $peerId, $fromId);
+                sendMessage($listenerId, "🎧 [Прослушка чата {$peerId}]\n👤 {$uSender}: {$text}");
+            }
+        }
+    }
 
-        handleCommand($pdo, $command, $args, $peerId, $fromId, $user, $msg);
+    // 2.3. Проверка активного мута (!мут) и Режима тишины (!тишина)
+    if ($peerId > 2000000000 && !$isSuper) {
+        // Проверка режима тишины (писать могут только пользователи с ролью > 0)
+        $silenceUntil = $ctx['chat']['silence_until'] ?? null;
+        if ($silenceUntil && strtotime($silenceUntil) > time() && $myPriority <= 0) {
+            if ($cmid > 0) deleteMessage($peerId, [$cmid]);
+            exit('ok');
+        }
+
+        // Проверка индивидуального мута
+        $stmtMute = $pdo->prepare("SELECT id FROM bot_punishments WHERE peer_id = ? AND target_vk_id = ? AND type = 'mute' AND is_active = 1 AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1");
+        $stmtMute->execute([$peerId, $fromId]);
+        if ($stmtMute->fetchColumn()) {
+            if ($cmid > 0) deleteMessage($peerId, [$cmid]);
+            exit('ok');
+        }
+
+        // 2.4. Автомодерация рекламы и ссылок (!automod) для участников без роли
+        if ((int)($ctx['chat']['automod_enabled'] ?? 0) === 1 && $myPriority <= 0) {
+            if (preg_match('/(https?:\/\/|vk\.cc\/|t\.me\/|discord\.gg\/|vk\.com\/(?:club|public|join))/iu', $text)) {
+                if ($cmid > 0) deleteMessage($peerId, [$cmid]);
+                $uWarn = formatUserMention($pdo, $peerId, $fromId);
+                sendMessage($peerId, "🤖 {$uWarn}, ссылки и реклама запрещены автомодерацией беседы!");
+                exit('ok');
+            }
+        }
+    }
+
+    // 2.5. Проверка нажатия на инлайн-кнопку (payload)
+    if (!empty($msg['payload'])) {
+        $payload = json_decode((string)$msg['payload'], true);
+        if (!empty($payload['cmd']) && is_string($payload['cmd'])) {
+            $text = $payload['cmd'];
+        }
+    }
+
+    // 2.6. Разбор команды с префиксами: ! / . (на русском и английском)
+    if (preg_match('/^[!\/\.]([\wа-яё]+)(?:\s+(.*))?$/isu', $text, $matches)) {
+        $rawCommand = mb_strtolower($matches[1]);
+        $cmdArgs    = trim($matches[2] ?? '');
+
+        executeCommand($pdo, $rawCommand, $cmdArgs, $peerId, $fromId, $ctx, $msg);
+    }
+
+    // 2.7. Фоновая проверка автоуведомлений (!timeuved и !gtimeuvedg) с вероятностью 20%, чтобы не нагружать каждый запрос
+    if (random_int(1, 5) === 1) {
+        processTimers($pdo);
     }
 
     exit('ok');
@@ -64,285 +157,45 @@ if ($data['type'] === 'message_new') {
 exit('ok');
 
 /**
- * Регистрация / обновление счетчика сообщений пользователя
+ * Фоновая отправка автоуведомлений (!timeuved и !gtimeuvedg)
  */
-function getOrCreateUser(PDO $pdo, int $vkId): array {
-    $stmt = $pdo->prepare("SELECT * FROM bot_users WHERE vk_id = ?");
-    $stmt->execute([$vkId]);
-    $user = $stmt->fetch();
+function processTimers(PDO $pdo): void {
+    // 1. Деактивация истёкших мутов и банов
+    $pdo->query("UPDATE bot_punishments SET is_active = 0 WHERE is_active = 1 AND expires_at IS NOT NULL AND expires_at <= NOW()");
 
-    if (!$user) {
-        $pdo->prepare("INSERT INTO bot_users (vk_id, nickname, role_level, messages_count) VALUES (?, 'Не указан', 0, 1)")
-            ->execute([$vkId]);
-        return [
-            'vk_id'          => $vkId,
-            'nickname'       => 'Не указан',
-            'role_level'     => 0,
-            'warns'          => 0,
-            'messages_count' => 1,
-            'is_banned'      => 0
-        ];
-    }
+    // 2. Проверка таймеров уведомлений
+    $stmt = $pdo->query("SELECT * FROM bot_timers WHERE is_active = 1");
+    $timers = $stmt->fetchAll();
+    $now = time();
+    $curHM = date('H:i');
 
-    $pdo->prepare("UPDATE bot_users SET messages_count = messages_count + 1, updated_at = NOW() WHERE vk_id = ?")
-        ->execute([$vkId]);
-    $user['messages_count']++;
-    return $user;
-}
+    foreach ($timers as $t) {
+        $tId = (int)$t['id'];
+        $tPeer = (int)$t['peer_id'];
+        $lastSent = !empty($t['last_sent_at']) ? strtotime($t['last_sent_at']) : 0;
+        $shouldSend = false;
 
-/**
- * Извлечение целевого VK ID из ответа (reply) или упоминания [id123|Name]
- */
-function extractTargetVkId(array $msg, string &$args): ?int {
-    if (isset($msg['reply_message']['from_id']) && $msg['reply_message']['from_id'] > 0) {
-        return (int)$msg['reply_message']['from_id'];
-    }
-    if (preg_match('/^\[id(\d+)\|[^\]]+\]\s*(.*)$/iu', $args, $m)) {
-        $args = trim($m[2]);
-        return (int)$m[1];
-    }
-    if (preg_match('/^(\d+)\s*(.*)$/u', $args, $m)) {
-        $args = trim($m[2]);
-        return (int)$m[1];
-    }
-    return null;
-}
-
-/**
- * Логирование действий администрации
- */
-function logAction(PDO $pdo, int $actorId, ?int $targetId, string $action, string $details = ''): void {
-    $stmt = $pdo->prepare("INSERT INTO bot_logs (actor_vk_id, target_vk_id, action, details) VALUES (?, ?, ?, ?)");
-    $stmt->execute([$actorId, $targetId, $action, $details]);
-}
-
-/**
- * Роутер команд
- */
-function handleCommand(PDO $pdo, string $cmd, string $args, int $peerId, int $fromId, array $user, array $msg): void {
-    $role = (int)$user['role_level'];
-    $roleNames = [
-        0 => 'Игрок',
-        1 => 'Модератор',
-        2 => 'Администратор',
-        3 => 'Руководство'
-    ];
-
-    switch ($cmd) {
-        case 'help':
-        case 'помощь':
-        case 'команды':
-            $help = "📋 Доступные команды бота RAZE RUSSIA:\n\n"
-                  . "👤 Общие команды:\n"
-                  . "• /profile (или /stats) — ваш профиль или профиль по ответу\n"
-                  . "• /staff — список администрации в боте\n"
-                  . "• /id — узнать ID чата и ваш VK ID\n\n";
-            if ($role >= 1) {
-                $help .= "🛡 Модерация (Уровень 1+):\n"
-                       . "• /setnick [юзер] [Ник] — установить игровой ник\n"
-                       . "• /warn [юзер] — выдать предупреждение (3/3 = кик)\n"
-                       . "• /unwarn [юзер] — снять предупреждение\n"
-                       . "• /kick [юзер] — исключить из беседы\n\n";
+        if (!empty($t['daily_time'])) {
+            if ($t['daily_time'] === $curHM && ($now - $lastSent) >= 3600) {
+                $shouldSend = true;
             }
-            if ($role >= 2) {
-                $help .= "⚡ Администрирование (Уровень 2+):\n"
-                       . "• /ban [юзер] — заблокировать доступ к боту\n"
-                       . "• /unban [юзер] — разблокировать в боте\n\n";
+        } else {
+            $intervalSec = max(1, (int)$t['interval_hours']) * 3600;
+            if (($now - $lastSent) >= $intervalSec) {
+                $shouldSend = true;
             }
-            if ($role >= 3) {
-                $help .= "👑 Руководство (Уровень 3):\n"
-                       . "• /setrole [юзер] [0-3] — изменить уровень доступа\n";
-            }
-            sendMessage($peerId, $help);
-            break;
+        }
 
-        case 'id':
-            sendMessage($peerId, "🆔 Ваш VK ID: {$fromId}\n💬 Peer ID чата: {$peerId}");
-            break;
-
-        case 'profile':
-        case 'stats':
-        case 'профиль':
-            $targetId = extractTargetVkId($msg, $args) ?? $fromId;
-            $stmt = $pdo->prepare("SELECT * FROM bot_users WHERE vk_id = ?");
-            $stmt->execute([$targetId]);
-            $target = $stmt->fetch();
-
-            if (!$target) {
-                sendMessage($peerId, "❌ Пользователь еще не зарегистрирован в базе бота.");
-                return;
-            }
-
-            $rName = $roleNames[(int)$target['role_level']] ?? 'Неизвестно';
-            $text = "📊 Профиль [id{$target['vk_id']}|пользователя]:\n"
-                  . "🎮 Никнейм: {$target['nickname']}\n"
-                  . "🛡 Должность: {$rName} (Ур. {$target['role_level']})\n"
-                  . "⚠️ Предупреждения: {$target['warns']}/3\n"
-                  . "✉️ Сообщений: {$target['messages_count']}";
-            sendMessage($peerId, $text);
-            break;
-
-        case 'staff':
-        case 'стафф':
-            $stmt = $pdo->query("SELECT vk_id, nickname, role_level FROM bot_users WHERE role_level > 0 ORDER BY role_level DESC");
-            $staff = $stmt->fetchAll();
-            if (!$staff) {
-                sendMessage($peerId, "Список администрации пуст.");
-                return;
-            }
-            $out = "🛡 Состав администрации RAZE RUSSIA:\n\n";
-            foreach ($staff as $s) {
-                $rName = $roleNames[(int)$s['role_level']] ?? 'Staff';
-                $out .= "• [id{$s['vk_id']}|{$s['nickname']}] — {$rName}\n";
-            }
-            sendMessage($peerId, $out);
-            break;
-
-        case 'setnick':
-        case 'ник':
-            if ($role < 1) {
-                sendMessage($peerId, "⛔ У вас нет прав для этой команды.");
-                return;
-            }
-            $targetId = extractTargetVkId($msg, $args);
-            $newNick  = trim($args);
-            if (!$targetId || $newNick === '') {
-                sendMessage($peerId, "⚠️ Использование: /setnick @упоминание Имя_Фамилия (или ответом на сообщение).");
-                return;
-            }
-            getOrCreateUser($pdo, $targetId);
-            $pdo->prepare("UPDATE bot_users SET nickname = ? WHERE vk_id = ?")->execute([$newNick, $targetId]);
-            logAction($pdo, $fromId, $targetId, 'setnick', $newNick);
-            sendMessage($peerId, "✅ Пользователю [id{$targetId}|ID {$targetId}] установлен никнейм: {$newNick}");
-            break;
-
-        case 'warn':
-        case 'варн':
-            if ($role < 1) {
-                sendMessage($peerId, "⛔ Недостаточно прав.");
-                return;
-            }
-            $targetId = extractTargetVkId($msg, $args);
-            if (!$targetId) {
-                sendMessage($peerId, "⚠️ Укажите пользователя (ответом или упоминанием).");
-                return;
-            }
-            $target = getOrCreateUser($pdo, $targetId);
-            if ((int)$target['role_level'] >= $role) {
-                sendMessage($peerId, "⛔ Нельзя выдать варн равному или старшему по должности.");
-                return;
-            }
-            $newWarns = (int)$target['warns'] + 1;
-            if ($newWarns >= 3) {
-                $pdo->prepare("UPDATE bot_users SET warns = 0 WHERE vk_id = ?")->execute([$targetId]);
-                sendMessage($peerId, "🚫 Пользователь [id{$targetId}|{$target['nickname']}] получил 3/3 предупреждений и исключается из беседы.");
-                if ($peerId > 2000000000) {
-                    vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $targetId]);
-                }
+        if ($shouldSend) {
+            $pdo->prepare("UPDATE bot_timers SET last_sent_at = NOW() WHERE id = ?")->execute([$tId]);
+            if ($tPeer > 0) {
+                sendMessage($tPeer, "⏰ Напоминание:\n" . $t['message_text']);
             } else {
-                $pdo->prepare("UPDATE bot_users SET warns = ? WHERE vk_id = ?")->execute([$newWarns, $targetId]);
-                sendMessage($peerId, "⚠️ Пользователю [id{$targetId}|{$target['nickname']}] выдано предупреждение ({$newWarns}/3).");
+                $allChats = $pdo->query("SELECT peer_id FROM bot_chats WHERE peer_id > 2000000000")->fetchAll(PDO::FETCH_COLUMN);
+                foreach ($allChats as $cp) {
+                    sendMessage((int)$cp, "📢 Автоуведомление:\n" . $t['message_text']);
+                }
             }
-            logAction($pdo, $fromId, $targetId, 'warn', "Warns: {$newWarns}/3");
-            break;
-
-        case 'unwarn':
-        case 'снятварн':
-            if ($role < 1) {
-                sendMessage($peerId, "⛔ Недостаточно прав.");
-                return;
-            }
-            $targetId = extractTargetVkId($msg, $args);
-            if (!$targetId) {
-                sendMessage($peerId, "⚠️ Укажите пользователя.");
-                return;
-            }
-            $target = getOrCreateUser($pdo, $targetId);
-            $newWarns = max(0, (int)$target['warns'] - 1);
-            $pdo->prepare("UPDATE bot_users SET warns = ? WHERE vk_id = ?")->execute([$newWarns, $targetId]);
-            logAction($pdo, $fromId, $targetId, 'unwarn', "Warns: {$newWarns}/3");
-            sendMessage($peerId, "✅ С пользователя [id{$targetId}|{$target['nickname']}] снято предупреждение ({$newWarns}/3).");
-            break;
-
-        case 'kick':
-        case 'кик':
-            if ($role < 1) {
-                sendMessage($peerId, "⛔ Недостаточно прав.");
-                return;
-            }
-            if ($peerId <= 2000000000) {
-                sendMessage($peerId, "⚠️ Команда работает только в беседах.");
-                return;
-            }
-            $targetId = extractTargetVkId($msg, $args);
-            if (!$targetId) {
-                sendMessage($peerId, "⚠️ Укажите пользователя для кика.");
-                return;
-            }
-            $target = getOrCreateUser($pdo, $targetId);
-            if ((int)$target['role_level'] >= $role) {
-                sendMessage($peerId, "⛔ Вы не можете кикнуть этого пользователя.");
-                return;
-            }
-            vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $targetId]);
-            logAction($pdo, $fromId, $targetId, 'kick', $args);
-            sendMessage($peerId, "👢 Пользователь [id{$targetId}|{$target['nickname']}] исключен из беседы.");
-            break;
-
-        case 'ban':
-        case 'бан':
-            if ($role < 2) {
-                sendMessage($peerId, "⛔ Требуется уровень доступа 2+ (Администратор).");
-                return;
-            }
-            $targetId = extractTargetVkId($msg, $args);
-            if (!$targetId) {
-                sendMessage($peerId, "⚠️ Укажите пользователя.");
-                return;
-            }
-            $target = getOrCreateUser($pdo, $targetId);
-            if ((int)$target['role_level'] >= $role) {
-                sendMessage($peerId, "⛔ Нельзя заблокировать старшего или равного администратора.");
-                return;
-            }
-            $pdo->prepare("UPDATE bot_users SET is_banned = 1 WHERE vk_id = ?")->execute([$targetId]);
-            logAction($pdo, $fromId, $targetId, 'ban', $args);
-            sendMessage($peerId, "🔨 Пользователю [id{$targetId}|{$target['nickname']}] заблокирован доступ к боту.");
-            break;
-
-        case 'unban':
-        case 'разбан':
-            if ($role < 2) {
-                sendMessage($peerId, "⛔ Требуется уровень доступа 2+.");
-                return;
-            }
-            $targetId = extractTargetVkId($msg, $args);
-            if (!$targetId) {
-                sendMessage($peerId, "⚠️ Укажите пользователя.");
-                return;
-            }
-            $pdo->prepare("UPDATE bot_users SET is_banned = 0 WHERE vk_id = ?")->execute([$targetId]);
-            logAction($pdo, $fromId, $targetId, 'unban');
-            sendMessage($peerId, "✅ Пользователь [id{$targetId}|ID {$targetId}] разблокирован в боте.");
-            break;
-
-        case 'setrole':
-        case 'роль':
-            if ($role < 3) {
-                sendMessage($peerId, "⛔ Доступно только Руководству (Уровень 3).");
-                return;
-            }
-            $targetId = extractTargetVkId($msg, $args);
-            $newLevel = (int)trim($args);
-            if (!$targetId || $newLevel < 0 || $newLevel > 3) {
-                sendMessage($peerId, "⚠️ Использование: /setrole @упоминание [0-3]\n0 - Игрок, 1 - Модератор, 2 - Админ, 3 - Руководство");
-                return;
-            }
-            getOrCreateUser($pdo, $targetId);
-            $pdo->prepare("UPDATE bot_users SET role_level = ? WHERE vk_id = ?")->execute([$newLevel, $targetId]);
-            logAction($pdo, $fromId, $targetId, 'setrole', (string)$newLevel);
-            $rName = $roleNames[$newLevel];
-            sendMessage($peerId, "👑 Пользователю [id{$targetId}|ID {$targetId}] выдана роль: {$rName} (Уровень {$newLevel}).");
-            break;
+        }
     }
 }
