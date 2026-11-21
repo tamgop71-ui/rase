@@ -168,6 +168,21 @@ function resolveCanonicalCommand(string $rawCmd): string {
         'userchats' => 'userchats', 'беседыюзера' => 'userchats',
         'ahistory' => 'ahistory', 'аистория' => 'ahistory',
         'checkban' => 'checkban', 'чекбан' => 'checkban',
+        // Новые команды v6.0 (Напоминалки, AFK, Опросы, Кейсы, Промо, Квесты, Whitelist, Фильтр, Триггеры, Антислив, KPI)
+        'напомни' => 'remind', 'напомнить' => 'remind', 'remind' => 'remind',
+        'напоминания' => 'reminders', 'reminders' => 'reminders',
+        'афк' => 'afk', 'afk' => 'afk',
+        'опрос' => 'poll', 'голосование' => 'poll', 'poll' => 'poll',
+        'кейс' => 'case', 'кейсы' => 'case', 'case' => 'case',
+        'промо' => 'promo', 'промокод' => 'promo', 'promo' => 'promo',
+        'квесты' => 'quests', 'квест' => 'quests', 'quests' => 'quests',
+        'whitelist' => 'whitelist', 'вл' => 'whitelist', 'белыйсписок' => 'whitelist', 'wl' => 'whitelist',
+        'фильтр' => 'filter', 'filter' => 'filter', 'слова' => 'filter',
+        'триггер' => 'trigger', 'триггеры' => 'trigger', 'trigger' => 'trigger', 'автоответ' => 'trigger',
+        'антислив' => 'antidrain', 'antidrain' => 'antidrain',
+        'актив' => 'kpi', 'kpi' => 'kpi', 'активность' => 'kpi',
+        'создатьпромо' => 'createpromo', 'createpromo' => 'createpromo', 'addpromo' => 'createpromo',
+
     ];
     return $map[$rawCmd] ?? $rawCmd;
 }
@@ -181,7 +196,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'stats' => 20, 'chatinfo' => 20, 'mute' => 20, 'unmute' => 20, 'kick' => 20,
         'warn' => 20, 'unwarn' => 20, 'getwarns' => 20, 'getwarn' => 20, 'warnlist' => 20,
         'getban' => 20, 'getmute' => 20, 'nick' => 20, 'snick' => 20, 'rnick' => 20,
-        'nlist' => 20, 'nonames' => 20, 'checknicks' => 20, 'zov' => 20, 'reg' => 20,
+        'nlist' => 20, 'nonames' => 20, 'checknicks' => 20, 'zov' => 20, 'reg' => 20, 'kpi' => 20,
 
         // >= 40 (Модератор)
         'ban' => 40, 'unban' => 40, 'banlist' => 40, 'clear' => 40, 'helper' => 40,
@@ -196,13 +211,13 @@ function getDefaultCmdPriority(string $cmd): int {
         'pin' => 80, 'unpin' => 80, 'admin' => 80, 'gadmin' => 80, 'newrole' => 80,
         'gnewrole' => 80, 'delrole' => 80, 'gdelrole' => 80, 'welcome' => 80,
         'setrules' => 80, 'delrules' => 80, 'setnote' => 80, 'inactive' => 80,
-        'givemoney' => 80, 'timeuved' => 80, 'enick' => 80,
+        'givemoney' => 80, 'timeuved' => 80, 'enick' => 80, 'whitelist' => 80, 'filter' => 80, 'trigger' => 80, 'createpromo' => 80,
 
         // 100 (Владелец)
         'settings' => 100, 'gsettings' => 100, 'setup' => 100, 'unity' => 100, 'unites' => 100,
         'addunity' => 100, 'createunity' => 100, 'editunity' => 100, 'removeunity' => 100,
         'deleteunity' => 100, 'sync' => 100, 'spec' => 100, 'gspec' => 100, 'wipe' => 100,
-        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100,
+        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100, 'antidrain' => 100,
         'editcmd' => 100, 'geditcmd' => 100, 'gedit' => 100, 'owner' => 100,
 
         // 999 (Супер-доступ / Создатель)
@@ -245,7 +260,7 @@ function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int
     $gameCmds = [
         'bonus', 'work', 'bank', 'deposit', 'withdraw', 'rob', 'casino', 'slots', 'roulette',
         'pay', 'duel', 'citizenship', 'mycountry', 'countries', 'marry', 'divorce', 'marriages',
-        'kiss', 'hug', 'try', 'iznas', 'minet', 'beer', 'roll', 'ball', 'choose', 'rep'
+        'kiss', 'hug', 'try', 'iznas', 'minet', 'beer', 'roll', 'ball', 'choose', 'rep', 'case', 'promo', 'quests'
     ];
     if (in_array($cmd, $gameCmds, true) && (int)($ctx['chat']['games_enabled'] ?? 1) === 0 && !$isSuper) {
         sendMessage($peerId, "🎮 Экономика и развлекательные команды отключены владельцем (!games).");
