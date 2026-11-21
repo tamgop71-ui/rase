@@ -1,6 +1,5 @@
 FROM php:8.2-cli
 
-# Устанавливаем PDO MySQL и OPcache + JIT для максимальной скорости выполнения
 RUN docker-php-ext-install pdo pdo_mysql opcache
 
 RUN { \
@@ -13,7 +12,6 @@ RUN { \
     echo 'opcache.jit=tracing'; \
 } > /usr/local/etc/php/conf.d/opcache-recommended.ini
 
-# 8 параллельных воркеров встроенного сервера PHP
 ENV PHP_CLI_SERVER_WORKERS=8
 
 WORKDIR /app

@@ -168,7 +168,7 @@ function resolveCanonicalCommand(string $rawCmd): string {
         'userchats' => 'userchats', 'беседыюзера' => 'userchats',
         'ahistory' => 'ahistory', 'аистория' => 'ahistory',
         'checkban' => 'checkban', 'чекбан' => 'checkban',
-        // Новые команды v6.0 (Напоминалки, AFK, Опросы, Кейсы, Промо, Квесты, Whitelist, Фильтр, Триггеры, Антислив, KPI)
+        // Новые команды (Напоминалки, AFK, Опросы, Кейсы, Промо, Квесты, Whitelist, Фильтр, Триггеры, Антислив, KPI)
         'напомни' => 'remind', 'напомнить' => 'remind', 'remind' => 'remind',
         'напоминания' => 'reminders', 'reminders' => 'reminders',
         'афк' => 'afk', 'afk' => 'afk',
@@ -182,6 +182,15 @@ function resolveCanonicalCommand(string $rawCmd): string {
         'антислив' => 'antidrain', 'antidrain' => 'antidrain',
         'актив' => 'kpi', 'kpi' => 'kpi', 'активность' => 'kpi',
         'создатьпромо' => 'createpromo', 'createpromo' => 'createpromo', 'addpromo' => 'createpromo',
+        // Магазин, Кланы, Монетка, Муты, Слоумод, Антирейд
+        'магазин' => 'shop', 'shop' => 'shop', 'шоп' => 'shop',
+        'монетка' => 'coin', 'coin' => 'coin', 'орел' => 'coin', 'орёл' => 'coin',
+        'клан' => 'clan', 'семья' => 'clan', 'clan' => 'clan', 'family' => 'clan',
+        'кланы' => 'clans', 'семьи' => 'clans', 'clans' => 'clans',
+        'муты' => 'mutelist', 'mutelist' => 'mutelist', 'мутлист' => 'mutelist',
+        'слоумод' => 'slowmode', 'slowmode' => 'slowmode', 'задержка' => 'slowmode',
+        'антирейд' => 'antiraid', 'antiraid' => 'antiraid',
+
 
     ];
     return $map[$rawCmd] ?? $rawCmd;
@@ -194,13 +203,13 @@ function getDefaultCmdPriority(string $cmd): int {
     static $priorities = [
         // >= 20 (Помощник)
         'stats' => 20, 'chatinfo' => 20, 'mute' => 20, 'unmute' => 20, 'kick' => 20,
-        'warn' => 20, 'unwarn' => 20, 'getwarns' => 20, 'getwarn' => 20, 'warnlist' => 20,
+        'warn' => 20, 'unwarn' => 20, 'getwarns' => 20, 'getwarn' => 20, 'warnlist' => 20, 'mutelist' => 20,
         'getban' => 20, 'getmute' => 20, 'nick' => 20, 'snick' => 20, 'rnick' => 20,
         'nlist' => 20, 'nonames' => 20, 'checknicks' => 20, 'zov' => 20, 'reg' => 20, 'kpi' => 20,
 
         // >= 40 (Модератор)
         'ban' => 40, 'unban' => 40, 'banlist' => 40, 'clear' => 40, 'helper' => 40,
-        'role' => 40, 'removerole' => 40, 'gremoverole' => 40, 'silence' => 40,
+        'role' => 40, 'removerole' => 40, 'gremoverole' => 40, 'silence' => 40, 'slowmode' => 40,
         'findnick' => 40, 'gzov' => 40, 'gkick' => 40, 'gsnick' => 40, 'grnick' => 40,
 
         // >= 60 (Администратор)
@@ -217,7 +226,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'settings' => 100, 'gsettings' => 100, 'setup' => 100, 'unity' => 100, 'unites' => 100,
         'addunity' => 100, 'createunity' => 100, 'editunity' => 100, 'removeunity' => 100,
         'deleteunity' => 100, 'sync' => 100, 'spec' => 100, 'gspec' => 100, 'wipe' => 100,
-        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100, 'antidrain' => 100,
+        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100, 'antidrain' => 100, 'antiraid' => 100,
         'editcmd' => 100, 'geditcmd' => 100, 'gedit' => 100, 'owner' => 100,
 
         // 999 (Супер-доступ / Создатель)
@@ -260,7 +269,7 @@ function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int
     $gameCmds = [
         'bonus', 'work', 'bank', 'deposit', 'withdraw', 'rob', 'casino', 'slots', 'roulette',
         'pay', 'duel', 'citizenship', 'mycountry', 'countries', 'marry', 'divorce', 'marriages',
-        'kiss', 'hug', 'try', 'iznas', 'minet', 'beer', 'roll', 'ball', 'choose', 'rep', 'case', 'promo', 'quests'
+        'kiss', 'hug', 'try', 'iznas', 'minet', 'beer', 'roll', 'ball', 'choose', 'rep', 'case', 'promo', 'quests', 'shop', 'coin', 'clan', 'clans'
     ];
     if (in_array($cmd, $gameCmds, true) && (int)($ctx['chat']['games_enabled'] ?? 1) === 0 && !$isSuper) {
         sendMessage($peerId, "🎮 Экономика и развлекательные команды отключены владельцем (!games).");

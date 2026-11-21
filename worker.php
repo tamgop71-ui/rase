@@ -2,11 +2,10 @@
 declare(strict_types=1);
 
 /**
- * Фоновый демон v6.0 TURBO.
- * Работает параллельно с веб-сервером, каждые 15 секунд:
- * 1) Отправляет напоминания (!напомни) точно в срок, даже если в чате тишина.
- * 2) Отправляет плановые автоуведомления (!timeuved / !gtimeuvedg).
- * 3) Деактивирует истёкшие муты/баны и чистит старый кэш сообщений.
+ * Фоновый демон RASE RUSSIA BOT.
+ * Каждые 15 секунд отправляет напоминания (!напомни),
+ * раз в минуту — плановые автоуведомления (!timeuved / !gtimeuvedg)
+ * и снимает истёкшие муты/баны.
  */
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/helpers.php';
@@ -30,10 +29,9 @@ while (true) {
             sendMessage($pId, "⏰ {$mention}напоминание (#{$rid}):\n📝 {$r['text']}");
         }
 
-        // 2. Раз в минуту: таймеры (!timeuved / !gtimeuvedg) + очистка истёкших мутов/банов
+        // 2. Раз в минуту: таймеры (!timeuved / !gtimeuvedg) и деактивация истёкших наказаний
         if ($tick % 4 === 0) {
             $pdo->query("UPDATE bot_punishments SET is_active = 0 WHERE is_active = 1 AND expires_at IS NOT NULL AND expires_at <= NOW()");
-            $pdo->query("DELETE FROM bot_recent_messages WHERE created_at < DATE_SUB(NOW(), INTERVAL 2 HOUR)");
 
             $timers = $pdo->query("SELECT * FROM bot_timers WHERE is_active = 1")->fetchAll();
             $now = time();
@@ -65,6 +63,8 @@ while (true) {
         }
     } catch (Throwable $e) {
         file_put_contents('php://stderr', "[WORKER ERROR] " . $e->getMessage() . PHP_EOL);
+        // При обрыве БД сбрасываем соединение, чтобы на следующем тике переподключиться
+        try { getDB(true); } catch (Throwable $ignore) {}
     }
 
     $tick++;

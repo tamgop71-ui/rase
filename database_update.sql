@@ -10,11 +10,13 @@ CREATE TABLE IF NOT EXISTS `bot_users` (
     `balance` BIGINT NOT NULL DEFAULT 1500,
     `bank_balance` BIGINT NOT NULL DEFAULT 0,
     `country_id` INT UNSIGNED DEFAULT NULL,
+    `clan_id` INT UNSIGNED DEFAULT NULL,
     `spouse_vk_id` BIGINT UNSIGNED DEFAULT NULL,
     `marriage_date` DATETIME DEFAULT NULL,
     `last_bonus` DATETIME DEFAULT NULL,
     `last_work` DATETIME DEFAULT NULL,
     `last_rob` DATETIME DEFAULT NULL,
+    `rob_shield_until` DATETIME DEFAULT NULL,
     `daily_given_amount` BIGINT NOT NULL DEFAULT 0,
     `daily_given_date` DATE DEFAULT NULL,
     `is_superadmin` TINYINT(1) NOT NULL DEFAULT 0,
@@ -33,7 +35,8 @@ CREATE TABLE IF NOT EXISTS `bot_users` (
     `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`vk_id`),
     KEY `idx_balance` (`balance`),
-    KEY `idx_country` (`country_id`)
+    KEY `idx_country` (`country_id`),
+    KEY `idx_clan` (`clan_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 2. Беседы и их настройки
@@ -50,6 +53,8 @@ CREATE TABLE IF NOT EXISTS `bot_chats` (
     `automod_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `antiflood_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `antidrain_enabled` TINYINT(1) NOT NULL DEFAULT 0,
+    `antiraid_enabled` TINYINT(1) NOT NULL DEFAULT 0,
+    `slowmode_sec` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
     `mentions_enabled` TINYINT(1) NOT NULL DEFAULT 1,
     `listen_target_vk_id` BIGINT UNSIGNED DEFAULT NULL,
     `listen_until` DATETIME DEFAULT NULL,
@@ -133,7 +138,18 @@ CREATE TABLE IF NOT EXISTS `bot_countries` (
     UNIQUE KEY `idx_name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 9. Предложения брака
+-- 9. Семьи / Кланы (!клан, !кланы)
+CREATE TABLE IF NOT EXISTS `bot_clans` (
+    `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `name` VARCHAR(64) NOT NULL,
+    `leader_vk_id` BIGINT UNSIGNED NOT NULL,
+    `treasury` BIGINT NOT NULL DEFAULT 0,
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `idx_clan_name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 10. Предложения брака
 CREATE TABLE IF NOT EXISTS `bot_marriage_proposals` (
     `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
     `peer_id` BIGINT UNSIGNED NOT NULL,
@@ -144,7 +160,7 @@ CREATE TABLE IF NOT EXISTS `bot_marriage_proposals` (
     UNIQUE KEY `idx_pair` (`from_vk_id`, `to_vk_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 10. Тикеты / Репорты
+-- 11. Тикеты / Репорты
 CREATE TABLE IF NOT EXISTS `bot_reports` (
     `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
     `peer_id` BIGINT UNSIGNED NOT NULL,
@@ -159,7 +175,7 @@ CREATE TABLE IF NOT EXISTS `bot_reports` (
     KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 11. Автоуведомления по расписанию
+-- 12. Автоуведомления по расписанию
 CREATE TABLE IF NOT EXISTS `bot_timers` (
     `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
     `peer_id` BIGINT UNSIGNED NOT NULL,
@@ -172,14 +188,14 @@ CREATE TABLE IF NOT EXISTS `bot_timers` (
     PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 12. Системные настройки
+-- 13. Системные настройки
 CREATE TABLE IF NOT EXISTS `bot_settings` (
     `setting_key` VARCHAR(64) NOT NULL,
     `setting_value` TEXT DEFAULT NULL,
     PRIMARY KEY (`setting_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 13. Заметки бесед
+-- 14. Заметки бесед
 CREATE TABLE IF NOT EXISTS `bot_notes` (
     `peer_id` BIGINT UNSIGNED NOT NULL,
     `note_key` VARCHAR(32) NOT NULL,
@@ -189,17 +205,7 @@ CREATE TABLE IF NOT EXISTS `bot_notes` (
     PRIMARY KEY (`peer_id`, `note_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 14. Кэш последних сообщений (!clear)
-CREATE TABLE IF NOT EXISTS `bot_recent_messages` (
-    `peer_id` BIGINT UNSIGNED NOT NULL,
-    `cmid` INT UNSIGNED NOT NULL,
-    `from_vk_id` BIGINT UNSIGNED NOT NULL,
-    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (`peer_id`, `cmid`),
-    KEY `idx_peer_user` (`peer_id`, `from_vk_id`, `cmid`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- 15. Белый список ссылок (!whitelist) — peer_id = 0 действует глобально на все чаты
+-- 15. Белый список ссылок (!whitelist) — peer_id = 0 действует глобально
 CREATE TABLE IF NOT EXISTS `bot_whitelist` (
     `peer_id` BIGINT UNSIGNED NOT NULL DEFAULT 0,
     `domain` VARCHAR(128) NOT NULL,
@@ -276,19 +282,25 @@ CREATE TABLE IF NOT EXISTS `bot_poll_votes` (
     PRIMARY KEY (`poll_id`, `vk_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Безопасная миграция колонок при обновлении со старых версий (без потери данных)
-DROP PROCEDURE IF EXISTS `bot_safe_migrate_v6`;
+-- Безопасное добавление новых колонок без потери существующих данных
+DROP PROCEDURE IF EXISTS `bot_safe_migrate`;
 DELIMITER $$
-CREATE PROCEDURE `bot_safe_migrate_v6`()
+CREATE PROCEDURE `bot_safe_migrate`()
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_users' AND COLUMN_NAME='bank_balance') THEN
         ALTER TABLE `bot_users` ADD COLUMN `bank_balance` BIGINT NOT NULL DEFAULT 0 AFTER `balance`;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_users' AND COLUMN_NAME='clan_id') THEN
+        ALTER TABLE `bot_users` ADD COLUMN `clan_id` INT UNSIGNED DEFAULT NULL AFTER `country_id`;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_users' AND COLUMN_NAME='last_work') THEN
         ALTER TABLE `bot_users` ADD COLUMN `last_work` DATETIME DEFAULT NULL AFTER `last_bonus`;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_users' AND COLUMN_NAME='last_rob') THEN
         ALTER TABLE `bot_users` ADD COLUMN `last_rob` DATETIME DEFAULT NULL AFTER `last_work`;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_users' AND COLUMN_NAME='rob_shield_until') THEN
+        ALTER TABLE `bot_users` ADD COLUMN `rob_shield_until` DATETIME DEFAULT NULL AFTER `last_rob`;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_users' AND COLUMN_NAME='is_vip') THEN
         ALTER TABLE `bot_users` ADD COLUMN `is_vip` TINYINT(1) NOT NULL DEFAULT 0 AFTER `is_superadmin`;
@@ -324,14 +336,20 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='antidrain_enabled') THEN
         ALTER TABLE `bot_chats` ADD COLUMN `antidrain_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `antiflood_enabled`;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='antiraid_enabled') THEN
+        ALTER TABLE `bot_chats` ADD COLUMN `antiraid_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `antidrain_enabled`;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='slowmode_sec') THEN
+        ALTER TABLE `bot_chats` ADD COLUMN `slowmode_sec` SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER `antiraid_enabled`;
+    END IF;
 
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chat_members' AND COLUMN_NAME='emoji') THEN
         ALTER TABLE `bot_chat_members` ADD COLUMN `emoji` VARCHAR(16) DEFAULT NULL AFTER `nickname`;
     END IF;
 END$$
 DELIMITER ;
-CALL `bot_safe_migrate_v6`();
-DROP PROCEDURE IF EXISTS `bot_safe_migrate_v6`;
+CALL `bot_safe_migrate`();
+DROP PROCEDURE IF EXISTS `bot_safe_migrate`;
 
 -- Глобальный белый список ссылок проекта по умолчанию (peer_id = 0)
 INSERT IGNORE INTO `bot_whitelist` (`peer_id`, `domain`, `added_by`) VALUES

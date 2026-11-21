@@ -18,12 +18,12 @@ if (strtolower($rawHost) === 'localhost' || $rawHost === '') {
 }
 define('DB_HOST', $rawHost);
 define('DB_PORT', trim((string)(getenv('DB_PORT') ?: '3306')));
-define('DB_NAME', trim((string)(getenv('DB_NAME') ?: 'raze_bot')));
+define('DB_NAME', trim((string)(getenv('DB_NAME') ?: 'rase_bot')));
 define('DB_USER', trim((string)(getenv('DB_USER') ?: 'root')));
 define('DB_PASS', trim((string)(getenv('DB_PASS') ?: '')));
 
 /**
- * Постоянное PDO-подключение к удаленной БД с авто-переподключением
+ * Постоянное PDO-подключение к удалённой БД с авто-переподключением
  */
 function getDB(bool $forceReconnect = false): PDO {
     static $pdo = null;
@@ -59,17 +59,20 @@ function getDB(bool $forceReconnect = false): PDO {
         return $pdo;
     } catch (PDOException $e) {
         file_put_contents('php://stderr', "[DB ERROR] " . $e->getMessage() . PHP_EOL);
+        if (PHP_SAPI === 'cli') {
+            throw $e;
+        }
         exit('ok');
     }
 }
 
 /**
- * Сверхбыстрый локальный кэш в /tmp (экономит запросы к удаленной БД)
+ * Быстрый локальный кэш в /tmp (экономит сетевые запросы к удалённой БД)
  */
-function cacheGet(string $key, int $ttl = 30) {
+function cacheGet(string $key, int $ttl = 60) {
     $file = '/tmp/botc_' . md5($key) . '.json';
     if (!is_file($file)) return null;
-    if ((time() - (int)@filemtime($file)) > $ttl) {
+    if ($ttl > 0 && (time() - (int)@filemtime($file)) > $ttl) {
         @unlink($file);
         return null;
     }

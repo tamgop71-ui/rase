@@ -81,9 +81,22 @@ function preloadUsers(PDO $pdo, int $peerId, array $vkIds): void {
 }
 
 /**
- * Турбо-загрузка контекста:
- * 1 SELECT забирает user + chat + member + is_muted.
- * 1 объединённый UPDATE обновляет счётчики сразу в 3 таблицах (вместо 4-5 отдельных запросов).
+ * Обновление реального названия беседы из VK API
+ */
+function refreshChatTitle(PDO $pdo, int $peerId): string {
+    if ($peerId <= 2000000000) return "Личные сообщения";
+    $res = vkApi('messages.getConversationsById', ['peer_ids' => $peerId]);
+    $title = trim((string)($res['response']['items'][0]['chat_settings']['title'] ?? ''));
+    if ($title !== '') {
+        $title = mb_substr($title, 0, 120);
+        $pdo->prepare("UPDATE bot_chats SET title = ? WHERE peer_id = ?")->execute([$title, $peerId]);
+        return $title;
+    }
+    return "Беседа #{$peerId}";
+}
+
+/**
+ * Быстрая загрузка контекста за 1 SELECT + 1 объединённый multi-table UPDATE
  */
 function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = '', bool $hasSticker = false): array {
     $charLen = mb_strlen($text);
@@ -94,14 +107,14 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
     $stmt = $pdo->prepare("
         SELECT
             u.vk_id AS u_exists, u.first_name, u.last_name, u.balance, u.bank_balance,
-            u.country_id, u.spouse_vk_id, u.marriage_date, u.last_bonus, u.last_work, u.last_rob,
-            u.daily_given_amount, u.daily_given_date, u.is_superadmin, u.is_vip, u.reputation,
+            u.country_id, u.clan_id, u.spouse_vk_id, u.marriage_date, u.last_bonus, u.last_work, u.last_rob,
+            u.rob_shield_until, u.daily_given_amount, u.daily_given_date, u.is_superadmin, u.is_vip, u.reputation,
             u.afk_reason, u.afk_since, u.daily_msgs, u.daily_games, u.daily_date, u.quest_claimed,
             u.total_messages, u.total_chars, u.total_stickers,
             c.peer_id AS c_exists, c.title, c.owner_vk_id, c.unity_id, c.rules_text, c.welcome_text,
             c.games_enabled, c.silence_until, c.silence_action, c.automod_enabled, c.antiflood_enabled,
-            c.antidrain_enabled, c.mentions_enabled, c.listen_target_vk_id, c.listen_until,
-            c.total_messages AS chat_total_messages,
+            c.antidrain_enabled, c.antiraid_enabled, c.slowmode_sec, c.mentions_enabled,
+            c.listen_target_vk_id, c.listen_until, c.total_messages AS chat_total_messages,
             m.vk_id AS m_exists, m.nickname, m.emoji, m.role_priority, m.gm_granted_by, m.gm_min_priority,
             m.mention_opt_in, m.messages_count, m.chars_count, m.stickers_count, m.joined_at, m.last_active_at,
             (SELECT 1 FROM bot_punishments p
@@ -149,7 +162,6 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
         $stmt->execute([$vkId, $peerId]);
         $row = $stmt->fetch() ?: [];
     } elseif ($hasActivity) {
-        // 1 объединённый multi-table UPDATE вместо 3 отдельных запросов к удаленной БД!
         $sameDay = (($row['daily_date'] ?? '') === $today);
         if ($sameDay) {
             $pdo->prepare("
@@ -202,11 +214,13 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
         'balance'            => (int)($row['balance'] ?? 1500),
         'bank_balance'       => (int)($row['bank_balance'] ?? 0),
         'country_id'         => $row['country_id'] ?? null,
+        'clan_id'            => $row['clan_id'] ?? null,
         'spouse_vk_id'       => $row['spouse_vk_id'] ?? null,
         'marriage_date'      => $row['marriage_date'] ?? null,
         'last_bonus'         => $row['last_bonus'] ?? null,
         'last_work'          => $row['last_work'] ?? null,
         'last_rob'           => $row['last_rob'] ?? null,
+        'rob_shield_until'   => $row['rob_shield_until'] ?? null,
         'daily_given_amount' => (int)($row['daily_given_amount'] ?? 0),
         'daily_given_date'   => $row['daily_given_date'] ?? null,
         'is_superadmin'      => $isSuperFinal ? 1 : 0,
@@ -236,6 +250,8 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
         'automod_enabled'     => (int)($row['automod_enabled'] ?? 0),
         'antiflood_enabled'   => (int)($row['antiflood_enabled'] ?? 0),
         'antidrain_enabled'   => (int)($row['antidrain_enabled'] ?? 0),
+        'antiraid_enabled'    => (int)($row['antiraid_enabled'] ?? 0),
+        'slowmode_sec'        => (int)($row['slowmode_sec'] ?? 0),
         'mentions_enabled'    => (int)($row['mentions_enabled'] ?? 1),
         'listen_target_vk_id' => $row['listen_target_vk_id'] ?? null,
         'listen_until'        => $row['listen_until'] ?? null,
@@ -312,24 +328,18 @@ function formatMoney(int $amount): string {
     return number_format($amount, 0, '.', ' ') . ' ₽';
 }
 
-/**
- * Парсер времени для напоминаний (!напомни):
- * Понимает: 10м, 2ч, 1д, 1ч30м, 30m, 2h, 1d, 18:30 (время по МСК)
- */
 function parseReminderTime(string $token): ?int {
     $token = mb_strtolower(trim($token));
     if ($token === '') return null;
 
-    // Формат ЧЧ:ММ
     if (preg_match('/^(\d{1,2}):(\d{2})$/', $token, $m)) {
         $h = (int)$m[1]; $min = (int)$m[2];
         if ($h > 23 || $min > 59) return null;
         $ts = mktime($h, $min, 0);
-        if ($ts <= time()) $ts += 86400; // На завтра, если время сегодня уже прошло
+        if ($ts <= time()) $ts += 86400;
         return $ts;
     }
 
-    // Составной формат: 1д2ч30м, 2ч, 15м, 45с
     if (preg_match_all('/(\d+)\s*(д|дн|d|ч|час|h|м|мин|m|с|сек|s)/iu', $token, $matches, PREG_SET_ORDER)) {
         $totalSec = 0;
         $matchedLen = 0;
@@ -346,7 +356,25 @@ function parseReminderTime(string $token): ?int {
             return time() + $totalSec;
         }
     }
+    return null;
+}
 
+/**
+ * Кэшируемый резолвер короткого имени ВК (экономит 150 мс VK API при повторных командах)
+ */
+function resolveVkScreenName(string $screenName): ?int {
+    $screenName = mb_strtolower(trim($screenName));
+    if (preg_match('/^id(\d+)$/i', $screenName, $idm)) {
+        return (int)$idm[1];
+    }
+    $cached = cacheGet("sn_{$screenName}", 86400);
+    if (is_int($cached) && $cached > 0) return $cached;
+    $res = vkApi('utils.resolveScreenName', ['screen_name' => $screenName]);
+    if (!empty($res['response']['object_id']) && ($res['response']['type'] ?? '') === 'user') {
+        $uid = (int)$res['response']['object_id'];
+        cacheSet("sn_{$screenName}", $uid);
+        return $uid;
+    }
     return null;
 }
 
@@ -365,20 +393,12 @@ function extractTargetUser(PDO $pdo, int $peerId, array $msg, string &$args): ?i
         return (int)$m[1];
     }
     if (preg_match('/^(?:https?:\/\/)?(?:m\.)?vk\.(?:com|ru)\/([a-zA-Z0-9_\.]+)(?:\s+(.*))?$/isu', $args, $m)) {
-        $screenName = $m[1]; $rest = trim($m[2] ?? '');
-        if (preg_match('/^id(\d+)$/i', $screenName, $idm)) { $args = $rest; return (int)$idm[1]; }
-        $res = vkApi('utils.resolveScreenName', ['screen_name' => $screenName]);
-        if (!empty($res['response']['object_id']) && ($res['response']['type'] ?? '') === 'user') {
-            $args = $rest; return (int)$res['response']['object_id'];
-        }
+        $uid = resolveVkScreenName($m[1]);
+        if ($uid) { $args = trim($m[2] ?? ''); return $uid; }
     }
     if (preg_match('/^@([a-zA-Z0-9_\.]+)(?:\s+(.*))?$/isu', $args, $m)) {
-        $screenName = $m[1]; $rest = trim($m[2] ?? '');
-        if (preg_match('/^id(\d+)$/i', $screenName, $idm)) { $args = $rest; return (int)$idm[1]; }
-        $res = vkApi('utils.resolveScreenName', ['screen_name' => $screenName]);
-        if (!empty($res['response']['object_id']) && ($res['response']['type'] ?? '') === 'user') {
-            $args = $rest; return (int)$res['response']['object_id'];
-        }
+        $uid = resolveVkScreenName($m[1]);
+        if ($uid) { $args = trim($m[2] ?? ''); return $uid; }
     }
     if (preg_match('/^(\d{3,12})(?:\s+(.*))?$/isu', $args, $m)) {
         $args = trim($m[2] ?? '');
@@ -453,9 +473,6 @@ function getRequiredPriority(PDO $pdo, int $peerId, string $canonicalCmd, int $d
     return $cached[$canonicalCmd] ?? $defaultPriority;
 }
 
-/**
- * Белый список ссылок беседы (!whitelist) с /tmp кэшированием
- */
 function getChatWhitelist(PDO $pdo, int $peerId): array {
     $cached = cacheGet("wl_{$peerId}", 60);
     if (is_array($cached)) return $cached;
@@ -466,12 +483,8 @@ function getChatWhitelist(PDO $pdo, int $peerId): array {
     return $list;
 }
 
-/**
- * Проверка сообщения на запрещённые ссылки с учётом белого списка (!whitelist)
- * Возвращает первую запрещённую ссылку или null, если все ссылки разрешены.
- */
 function findBlockedLink(PDO $pdo, int $peerId, string $text): ?string {
-    $pattern = '/(?:https?:\/\/|www\.)[^\s<>"\']+|(?:vk\.cc|t\.me|telegram\.me|discord\.gg|discord\.com\/invite|vk\.(?:com|ru)\/(?:club|public|join)|[a-z0-9\-]+\.(?:ru|com|net|org|online|site|xyz|su|fun|gg|me))(?:\/[^\s<>"\']*)?/iu';
+    $pattern = '/(?:https?:\/\/|www\.)[^\s<>"\']+|(?:vk\.cc|t\.me|telegram\.me|discord\.gg|discord\.com\/invite|vk\.(?:com|ru)\/(?:club|public|join)|[a-z0-9\-]+\.(?:ru|com|net|org|online|site|xyz|su|fun|gg|me|io|tv|cc))(?:\/[^\s<>"\']*)?/iu';
     if (!preg_match_all($pattern, $text, $matches)) {
         return null;
     }
@@ -493,9 +506,6 @@ function findBlockedLink(PDO $pdo, int $peerId, string $text): ?string {
     return null;
 }
 
-/**
- * Фильтр запрещённых слов беседы (!фильтр) с кэшем
- */
 function getChatFilters(PDO $pdo, int $peerId): array {
     $cached = cacheGet("flt_{$peerId}", 60);
     if (is_array($cached)) return $cached;
@@ -506,9 +516,6 @@ function getChatFilters(PDO $pdo, int $peerId): array {
     return $list;
 }
 
-/**
- * Кастомные триггеры беседы (!триггер) с кэшем
- */
 function getChatTriggers(PDO $pdo, int $peerId): array {
     $cached = cacheGet("trg_{$peerId}", 60);
     if (is_array($cached)) return $cached;
@@ -520,6 +527,62 @@ function getChatTriggers(PDO $pdo, int $peerId): array {
     }
     cacheSet("trg_{$peerId}", $map);
     return $map;
+}
+
+/**
+ * Сверхбыстрый локальный буфер последних сообщений для !clear (0 SQL-запросов!)
+ */
+function recordRecentMessage(int $peerId, int $cmid, int $fromId): void {
+    $file = "/tmp/msgs_{$peerId}.json";
+    $list = [];
+    if (is_file($file)) {
+        $raw = @file_get_contents($file);
+        if ($raw) $list = json_decode($raw, true) ?: [];
+    }
+    $list[] = ['c' => $cmid, 'u' => $fromId];
+    if (count($list) > 120) {
+        $list = array_slice($list, -120);
+    }
+    @file_put_contents($file, json_encode($list), LOCK_EX);
+}
+
+function popRecentMessages(int $peerId, ?int $targetId, int $limit): array {
+    $file = "/tmp/msgs_{$peerId}.json";
+    if (!is_file($file)) return [];
+    $list = json_decode((string)@file_get_contents($file), true) ?: [];
+    $matched = [];
+    $remaining = [];
+    for ($i = count($list) - 1; $i >= 0; $i--) {
+        $item = $list[$i];
+        if (count($matched) < $limit && ($targetId === null || (int)$item['u'] === $targetId)) {
+            $matched[] = (int)$item['c'];
+        } else {
+            $remaining[] = $item;
+        }
+    }
+    @file_put_contents($file, json_encode(array_reverse($remaining)), LOCK_EX);
+    return $matched;
+}
+
+/**
+ * Локальный индекс AFK-пользователей в /tmp (убирает SQL-запрос при каждом упоминании)
+ */
+function setAfkCache(int $vkId, ?array $info): void {
+    $file = '/tmp/afk_index.json';
+    $data = is_file($file) ? (json_decode((string)@file_get_contents($file), true) ?: []) : [];
+    if ($info === null) {
+        unset($data[(string)$vkId]);
+    } else {
+        $data[(string)$vkId] = $info;
+    }
+    @file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX);
+}
+
+function getAfkFromCache(int $vkId): ?array {
+    $file = '/tmp/afk_index.json';
+    if (!is_file($file)) return null;
+    $data = json_decode((string)@file_get_contents($file), true);
+    return $data[(string)$vkId] ?? null;
 }
 
 /**
@@ -544,8 +607,24 @@ function checkAntiFlood(int $peerId, int $vkId): bool {
 }
 
 /**
- * Анти-слив (!антислив): если админ (<100) делает >= 3 жёстких действий за 120 сек —
- * бот автоматически снимает с него роль, кикает и бьёт тревогу!
+ * Медленный режим (!слоумод) через /tmp (0 SQL-запросов)
+ */
+function checkSlowmode(int $peerId, int $vkId, int $seconds): bool {
+    if ($seconds <= 0) return false;
+    $file = "/tmp/sm_{$peerId}_{$vkId}.txt";
+    $now = time();
+    if (is_file($file)) {
+        $last = (int)@file_get_contents($file);
+        if (($now - $last) < $seconds) {
+            return true;
+        }
+    }
+    @file_put_contents($file, (string)$now);
+    return false;
+}
+
+/**
+ * Анти-слив (!антислив): 4+ жёстких действий админа (<100) за 2 минуты -> снятие роли + кик
  */
 function checkAntiDrain(PDO $pdo, int $peerId, int $actorId, int $actorPriority, bool $isSuper, array $chat): bool {
     if ($isSuper || $actorPriority >= 100 || (int)($chat['antidrain_enabled'] ?? 0) === 0) {
@@ -567,13 +646,12 @@ function checkAntiDrain(PDO $pdo, int $peerId, int $actorId, int $actorPriority,
     @file_put_contents($file, implode(',', $times));
 
     if (count($times) >= 4) {
-        // Сработала защита от слива!
         $pdo->prepare("UPDATE bot_chat_members SET role_priority = 0 WHERE peer_id = ? AND vk_id = ?")->execute([$peerId, $actorId]);
         if ($peerId > 2000000000) {
             vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $actorId]);
         }
         $uActor = formatUserMention($pdo, $peerId, $actorId);
-        $alert = "🚨 [АНТИ-СЛИВ] Обнаружена подозрительная активность администратора {$uActor} (более 3 киков/банов за 2 минуты)!\n🛡 Роль немедленно снята, нарушитель исключён из беседы.";
+        $alert = "🚨 [АНТИ-СЛИВ] Обнаружена подозрительная активность администратора {$uActor} (4+ киков/банов/снятий ролей за 2 минуты)!\n🛡 Роль немедленно снята, нарушитель исключён из беседы.";
         sendMessage($peerId, $alert);
         sendToLogChat($pdo, "Беседа {$peerId}:\n" . $alert);
         @unlink($file);
