@@ -116,7 +116,7 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
             c.antidrain_enabled, c.antiraid_enabled, c.anticaps_enabled, c.slowmode_sec, c.mentions_enabled,
             c.listen_target_vk_id, c.listen_until, c.total_messages AS chat_total_messages,
             m.vk_id AS m_exists, m.nickname, m.emoji, m.role_priority, m.gm_granted_by, m.gm_min_priority,
-            m.mention_opt_in, m.invited_by, m.messages_count, m.chars_count, m.stickers_count, m.joined_at, m.last_active_at,
+            m.mention_opt_in, m.invited_by, m.temp_role_until, m.vacation_until, m.vacation_reason, m.messages_count, m.chars_count, m.stickers_count, m.joined_at, m.last_active_at,
             (SELECT 1 FROM bot_punishments p
              WHERE p.peer_id = q.req_peer AND p.target_vk_id = q.req_vk AND p.type = 'mute'
                AND p.is_active = 1 AND (p.expires_at IS NULL OR p.expires_at > NOW())
@@ -274,6 +274,9 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
         'gm_min_priority' => (int)($row['gm_min_priority'] ?? 0),
         'mention_opt_in'  => (int)($row['mention_opt_in'] ?? 1),
         'invited_by'      => !empty($row['invited_by']) ? (int)$row['invited_by'] : null,
+        'temp_role_until' => $row['temp_role_until'] ?? null,
+        'vacation_until'  => $row['vacation_until'] ?? null,
+        'vacation_reason' => $row['vacation_reason'] ?? null,
         'messages_count'  => (int)($row['messages_count'] ?? 1) + ($hasActivity && !$needRefetch ? 1 : 0),
         'chars_count'     => (int)($row['chars_count'] ?? 0) + ($hasActivity && !$needRefetch ? $charLen : 0),
         'stickers_count'  => (int)($row['stickers_count'] ?? 0) + ($hasActivity && !$needRefetch ? $stickerInc : 0),

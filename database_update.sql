@@ -77,6 +77,9 @@ CREATE TABLE IF NOT EXISTS `bot_chat_members` (
     `gm_min_priority` INT NOT NULL DEFAULT 0,
     `mention_opt_in` TINYINT(1) NOT NULL DEFAULT 1,
     `invited_by` BIGINT UNSIGNED DEFAULT NULL,
+    `temp_role_until` DATETIME DEFAULT NULL,
+    `vacation_until` DATETIME DEFAULT NULL,
+    `vacation_reason` VARCHAR(128) DEFAULT NULL,
     `messages_count` INT UNSIGNED NOT NULL DEFAULT 0,
     `chars_count` BIGINT UNSIGNED NOT NULL DEFAULT 0,
     `stickers_count` INT UNSIGNED NOT NULL DEFAULT 0,
@@ -370,6 +373,15 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chat_members' AND COLUMN_NAME='invited_by') THEN
         ALTER TABLE `bot_chat_members` ADD COLUMN `invited_by` BIGINT UNSIGNED DEFAULT NULL AFTER `mention_opt_in`;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chat_members' AND COLUMN_NAME='temp_role_until') THEN
+        ALTER TABLE `bot_chat_members` ADD COLUMN `temp_role_until` DATETIME DEFAULT NULL AFTER `invited_by`;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chat_members' AND COLUMN_NAME='vacation_until') THEN
+        ALTER TABLE `bot_chat_members` ADD COLUMN `vacation_until` DATETIME DEFAULT NULL AFTER `temp_role_until`;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chat_members' AND COLUMN_NAME='vacation_reason') THEN
+        ALTER TABLE `bot_chat_members` ADD COLUMN `vacation_reason` VARCHAR(128) DEFAULT NULL AFTER `vacation_until`;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chat_members' AND COLUMN_NAME='emoji') THEN
         ALTER TABLE `bot_chat_members` ADD COLUMN `emoji` VARCHAR(16) DEFAULT NULL AFTER `nickname`;

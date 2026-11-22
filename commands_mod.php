@@ -827,7 +827,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             }
             $days = max(1, (int)$m[1]);
             $doKick = !empty($m[2]);
-            $stmt = $pdo->prepare("SELECT vk_id, last_active_at FROM bot_chat_members WHERE peer_id = ? AND role_priority = 0 AND last_active_at < DATE_SUB(NOW(), INTERVAL ? DAY) LIMIT 40");
+            $stmt = $pdo->prepare("SELECT vk_id, last_active_at FROM bot_chat_members WHERE peer_id = ? AND role_priority = 0 AND (vacation_until IS NULL OR vacation_until <= NOW()) AND last_active_at < DATE_SUB(NOW(), INTERVAL ? DAY) LIMIT 40");
             $stmt->execute([$peerId, $days]);
             $rows = $stmt->fetchAll();
             if (empty($rows)) { sendMessage($peerId, "✅ Неактивных участников более {$days} дн. нет."); return true; }
@@ -1550,7 +1550,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
         case 'kpi':
             $days = ctype_digit(trim($args)) ? max(1, min(90, (int)trim($args))) : 7;
             $stmt = $pdo->prepare("
-                SELECT m.vk_id, m.role_priority, m.messages_count,
+                SELECT m.vk_id, m.role_priority, m.messages_count, m.vacation_until,
                        (SELECT COUNT(*) FROM bot_punishments p WHERE p.peer_id = m.peer_id AND p.actor_vk_id = m.vk_id AND p.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)) AS actions_cnt
                 FROM bot_chat_members m
                 WHERE m.peer_id = ? AND m.role_priority > 0
@@ -1566,7 +1566,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             foreach ($rows as $r) {
                 $rName = getRoleName($pdo, $peerId, (int)$r['role_priority']);
                 $uM = formatUserMention($pdo, $peerId, (int)$r['vk_id']);
-                $lines[] = "{$i}. {$uM} ({$rName}) — 🛡 Наказаний: {$r['actions_cnt']} | ✉️ Сообщ: {$r['messages_count']}";
+                $vacBadge = (!empty($r['vacation_until']) && strtotime($r['vacation_until']) > time()) ? ' 🏖 [Отпуск]' : '';
+                $lines[] = "{$i}. {$uM} ({$rName}){$vacBadge} — 🛡 Наказаний: {$r['actions_cnt']} | ✉️ Сообщ: {$r['messages_count']}";
                 $i++;
             }
             sendMessage($peerId, implode("\n", $lines), null, ['disable_mentions' => 1]);
@@ -2014,6 +2015,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 . "🤝 Кто пригласил: {$invStr}\n"
                 . "🔰 Иммунитет (/gm): {$gmStr}\n"
                 . "⚠️ Активных варнов: {$warns}/3 | 🚫 Активных банов: {$bans}\n"
+                . "🏖 Отпуск: " . (!empty($m['vacation_until']) && strtotime($m['vacation_until']) > time() ? ('до ' . date('d.m.Y', strtotime($m['vacation_until'])) . ' (' . ($m['vacation_reason'] ?: 'без причины') . ')') : 'Нет') . "\n"
                 . "🔇 Мут сейчас: " . (!empty($m['is_muted']) ? 'Да' : 'Нет') . "\n"
                 . "✉️ Сообщений в чате: {$m['messages_count']} (Всего: {$g['total_messages']})", null, ['disable_mentions' => 1]);
             return true;
@@ -2031,6 +2033,126 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 $i++;
             }
             sendMessage($peerId, implode("\n", $lines), null, ['disable_mentions' => 1]);
+            return true;
+
+
+        case 'koch':
+            sendMessage($peerId, "братан");
+            return true;
+
+        case 'temprole':
+            $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
+            if (!$targetId || !preg_match('/^(\d+)\s+(\d+)$/u', trim($args), $m)) {
+                sendMessage($peerId, "⚠️ Использование: !temprole [ID/упоминание] [приоритет] [дни]\nПример: !temprole @ivan 20 7");
+                return true;
+            }
+            $newPriority = max(1, min(99, (int)$m[1]));
+            $days = max(1, min(365, (int)$m[2]));
+            if (!$isSuper && $newPriority >= $myPriority) {
+                sendMessage($peerId, "⛔ Вы не можете выдать роль с приоритетом равным или выше вашего ({$myPriority}).");
+                return true;
+            }
+            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
+            if ($err !== null && $err !== 'REQUIRE_SUPER_APPROVAL') { sendMessage($peerId, $err); return true; }
+
+            $expTs = time() + ($days * 86400);
+            $expSql = date('Y-m-d H:i:s', $expTs);
+            ensureUserAndMember($pdo, $peerId, $targetId);
+            $pdo->prepare("UPDATE bot_chat_members SET role_priority = ?, temp_role_until = ? WHERE peer_id = ? AND vk_id = ?")
+                ->execute([$newPriority, $expSql, $peerId, $targetId]);
+            $rName = getRoleName($pdo, $peerId, $newPriority);
+            $uT = formatUserMention($pdo, $peerId, $targetId);
+            $uA = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "⏳ Выдана временная роль\n👤 Пользователь: {$uT}\n🎖 Роль: «{$rName}» ({$newPriority})\n👮 Выдал: {$uA}\n📅 Срок: {$days} дн. (до " . date('d.m.Y H:i', $expTs) . " МСК)");
+            sendToLogChat($pdo, "Беседа {$peerId}: {$uA} выдал временную роль «{$rName}» ({$newPriority}) на {$days} дн. -> {$uT}");
+            return true;
+
+        case 'vacation':
+            $raw = trim($args);
+            if (in_array(mb_strtolower($raw), ['off', 'выкл', 'снять', '0'], true)) {
+                $pdo->prepare("UPDATE bot_chat_members SET vacation_until = NULL, vacation_reason = NULL WHERE peer_id = ? AND vk_id = ?")->execute([$peerId, $fromId]);
+                sendMessage($peerId, "🏖 Ваш отпуск досрочно завершён! С возвращением в строй.");
+                return true;
+            }
+            if (!preg_match('/^(\d+)(?:\s+(.*))?$/isu', $raw, $m)) {
+                sendMessage($peerId, "🏖 Использование: !отпуск [дни 1-60] (причина)\nЗавершить досрочно: !отпуск снять");
+                return true;
+            }
+            $days = max(1, min(60, (int)$m[1]));
+            $reason = !empty($m[2]) ? mb_substr(trim($m[2]), 0, 120) : 'Личные обстоятельства';
+            $expTs = time() + ($days * 86400);
+            $pdo->prepare("UPDATE bot_chat_members SET vacation_until = ?, vacation_reason = ? WHERE peer_id = ? AND vk_id = ?")
+                ->execute([date('Y-m-d H:i:s', $expTs), $reason, $peerId, $fromId]);
+            $uA = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "🏖 Оформлен отпуск\n👤 Администратор: {$uA}\n⏳ Срок: {$days} дн. (до " . date('d.m.Y', $expTs) . ")\n📝 Причина: {$reason}");
+            return true;
+
+        case 'vacations':
+            $stmt = $pdo->prepare("SELECT vk_id, role_priority, vacation_until, vacation_reason FROM bot_chat_members WHERE peer_id = ? AND vacation_until IS NOT NULL AND vacation_until > NOW() ORDER BY vacation_until ASC LIMIT 25");
+            $stmt->execute([$peerId]);
+            $rows = $stmt->fetchAll();
+            if (empty($rows)) { sendMessage($peerId, "🏖 Сейчас никто из администрации не находится в отпуске."); return true; }
+            preloadUsers($pdo, $peerId, array_column($rows, 'vk_id'));
+            $lines = ["🏖 Администраторы в отпуске (" . count($rows) . "):"];
+            $i = 1;
+            foreach ($rows as $r) {
+                $rName = getRoleName($pdo, $peerId, (int)$r['role_priority']);
+                $dt = date('d.m.Y', strtotime($r['vacation_until']));
+                $lines[] = "{$i}. " . formatUserMention($pdo, $peerId, (int)$r['vk_id']) . " ({$rName}) — до {$dt} | {$r['vacation_reason']}";
+                $i++;
+            }
+            sendMessage($peerId, implode("\n", $lines), null, ['disable_mentions' => 1]);
+            return true;
+
+        case 'sysaudit':
+            $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
+            if (!$targetId) { sendMessage($peerId, "⚠️ Использование: /sysaudit [ID/ссылка]"); return true; }
+            $stmt = $pdo->prepare("SELECT * FROM bot_punishments WHERE actor_vk_id = ? ORDER BY id DESC LIMIT 20");
+            $stmt->execute([$targetId]);
+            $rows = $stmt->fetchAll();
+            $uA = formatUserMention($pdo, $peerId, $targetId);
+            if (empty($rows)) { sendMessage($peerId, "📋 У администратора {$uA} нет зафиксированных наказаний во всех беседах бота."); return true; }
+            preloadUsers($pdo, $peerId, array_column($rows, 'target_vk_id'));
+            $lines = ["🔎 [SYSAUDIT] Последние действия {$uA} по всем беседам:"];
+            foreach ($rows as $r) {
+                $dt = date('d.m H:i', strtotime($r['created_at']));
+                $uT = formatUserMention($pdo, $peerId, (int)$r['target_vk_id']);
+                $lines[] = "• [{$dt}] Чат {$r['peer_id']} | " . strtoupper($r['type']) . " → {$uT} | {$r['reason']}";
+            }
+            sendMessage($peerId, implode("\n", $lines), null, ['disable_mentions' => 1]);
+            return true;
+
+        case 'clonechat':
+            $srcPeer = (int)trim($args);
+            if ($srcPeer <= 0) {
+                sendMessage($peerId, "⚠️ Использование: !clone [ID исходной беседы]\nКопирует правила, приветствие, кастомные роли, белый список ссылок, фильтры слов и триггеры.");
+                return true;
+            }
+            if ($srcPeer < 2000000000) $srcPeer += 2000000000;
+            if ($srcPeer === $peerId) { sendMessage($peerId, "⚠️ Нельзя клонировать беседу саму в себя."); return true; }
+            $stSrc = $pdo->prepare("SELECT * FROM bot_chats WHERE peer_id = ?");
+            $stSrc->execute([$srcPeer]);
+            $src = $stSrc->fetch();
+            if (!$src) { sendMessage($peerId, "❌ Беседа {$srcPeer} не найдена в базе."); return true; }
+            if (!$isSuper && (int)$src['owner_vk_id'] !== $fromId) {
+                sendMessage($peerId, "⛔ Клонировать настройки можно только из беседы, где вы являетесь Владельцем.");
+                return true;
+            }
+
+            $pdo->prepare("UPDATE bot_chats SET rules_text = ?, welcome_text = ?, games_enabled = ?, automod_enabled = ?, antiflood_enabled = ?, antidrain_enabled = ?, anticaps_enabled = ?, slowmode_sec = ? WHERE peer_id = ?")
+                ->execute([$src['rules_text'], $src['welcome_text'], $src['games_enabled'], $src['automod_enabled'], $src['antiflood_enabled'], $src['antidrain_enabled'], $src['anticaps_enabled'], $src['slowmode_sec'], $peerId]);
+
+            $pdo->prepare("INSERT IGNORE INTO bot_chat_roles (peer_id, priority, role_name) SELECT ?, priority, role_name FROM bot_chat_roles WHERE peer_id = ?")->execute([$peerId, $srcPeer]);
+            $pdo->prepare("INSERT IGNORE INTO bot_whitelist (peer_id, domain, added_by) SELECT ?, domain, ? FROM bot_whitelist WHERE peer_id = ?")->execute([$peerId, $fromId, $srcPeer]);
+            $pdo->prepare("INSERT IGNORE INTO bot_filters (peer_id, word) SELECT ?, word FROM bot_filters WHERE peer_id = ?")->execute([$peerId, $srcPeer]);
+            $pdo->prepare("INSERT IGNORE INTO bot_triggers (peer_id, trigger_key, response_text) SELECT ?, trigger_key, response_text FROM bot_triggers WHERE peer_id = ?")->execute([$peerId, $srcPeer]);
+
+            cacheDel("roles_{$peerId}");
+            cacheDel("wl_{$peerId}");
+            cacheDel("flt_{$peerId}");
+            cacheDel("trg_{$peerId}");
+
+            sendMessage($peerId, "📋 Настройки успешно клонированы из беседы «{$src['title']}» ({$srcPeer})!\nСкопированы: правила, приветствие, режимы защиты, роли, !whitelist, !фильтр и !триггер.");
             return true;
 
     }

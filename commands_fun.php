@@ -61,7 +61,8 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "• !поцелуй / !обнять / !попытка / !пиво / !iznas / !minet";
             } elseif ($cat === 'mod20') {
                 $txt = "🛡 Команды Помощника (приоритет ≥ 20):\n\n"
-                     . "• !стата (ID) / !досье (!whois) [ID] / !чатинфо / !reg / !актив [дни]\n"
+                     . "• !стата / !досье (!whois) [ID] / !чатинфо / !актив [дни]\n"
+                     . "• !отпуск [дни] (причина) / !отпуска — реестр отпусков\n"
                      . "• !мут [ID] [мин] (причина) / !унмут [ID]\n"
                      . "• !кик [ID] (причина) — исключить из чата\n"
                      . "• !пред (!варн) [ID] (причина) / !унварн [ID]\n"
@@ -81,7 +82,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             } elseif ($cat === 'adm') {
                 $txt = "⚡ Администратор (60+) и Гл. Админ (80+):\n\n"
                      . "Приоритет ≥ 60:\n"
-                     . "• !модер / !grole / !гпомощник / !гмодер [ID]\n"
+                     . "• !модер / !grole / !temprole [ID] [роль] [дни]\n"
                      . "• !gban / !gunban [ID] | !удалить (пересланное)\n"
                      . "• !gm [ID] / !removegm [ID] / !gms — иммунитет\n"
                      . "• !history [ID] / !reports / !getreport\n\n"
@@ -99,9 +100,9 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "• !антислив (!antidrain) | !антирейд (!antiraid) — защита чата\n"
                      . "• !automod / !антифлуд / !антикапс / !games / !уведы\n"
                      . "• !unity / !unites / !createunity / !addunity / !editunity / !removeunity / !deleteunity\n"
-                     . "• !sync / !spec / !gspec / !wipe / !migration\n"
+                     . "• !sync / !spec / !gspec / !wipe / !migration / !clone [ID]\n"
                      . "• !editcmd / !geditcmd / !owner [ID] / !никэмодзи\n"
-                     . "• Супер-доступ: /sysban, /sysunban, /syskick, /sysrole, /sysnick, /giverub, /givesoo, /broadcast, /botban, /botunban, /sysstats, /syslist, /maintenance, !addws, !vip, !setlog, !zovvv, !gzovg, !gtimeuvedg, !listunities, !listen, !chatlist, !userchats, !ahistory, !checkban";
+                     . "• Супер-доступ: /sysban, /sysunban, /syskick, /sysrole, /sysnick, /giverub, /givesoo, /broadcast, /botban, /botunban, /sysstats, /sysaudit, /syslist, /maintenance, !addws, !vip, !setlog, !zovvv, !gzovg, !gtimeuvedg, !listunities, !listen, !chatlist, !userchats, !ahistory, !checkban";
             } else {
                 $txt = "📋 Справка по командам RASE RUSSIA BOT:\n"
                      . "Префиксы: ! / . + - (на русском и английском)\n\n"

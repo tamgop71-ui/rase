@@ -4,13 +4,13 @@ declare(strict_types=1);
 /**
  * Фоновый демон RASE RUSSIA BOT.
  * Каждые 15 секунд отправляет напоминания (!напомни),
- * раз в минуту — плановые автоуведомления (!timeuved / !gtimeuvedg)
- * и снимает истёкшие муты/баны.
+ * раз в минуту — таймеры, снятие истёкших мутов/банов и временных ролей (!temprole),
+ * раз в 10 минут — очищает устаревший кэш /tmp.
  */
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/helpers.php';
 
-file_put_contents('php://stderr', "[WORKER] Background reminder & timer daemon started." . PHP_EOL);
+file_put_contents('php://stderr', "[WORKER] Background daemon started." . PHP_EOL);
 
 $tick = 0;
 while (true) {
@@ -29,10 +29,22 @@ while (true) {
             sendMessage($pId, "⏰ {$mention}напоминание (#{$rid}):\n📝 {$r['text']}");
         }
 
-        // 2. Раз в минуту: таймеры (!timeuved / !gtimeuvedg) и деактивация истёкших наказаний
+        // 2. Раз в минуту: истёкшие муты/баны, временные роли (!temprole), отпуска и таймеры
         if ($tick % 4 === 0) {
             $pdo->query("UPDATE bot_punishments SET is_active = 0 WHERE is_active = 1 AND expires_at IS NOT NULL AND expires_at <= NOW()");
+            $pdo->query("UPDATE bot_chat_members SET vacation_until = NULL, vacation_reason = NULL WHERE vacation_until IS NOT NULL AND vacation_until <= NOW()");
 
+            // Автоснятие истёкших временных ролей
+            $expRoles = $pdo->query("SELECT peer_id, vk_id, role_priority FROM bot_chat_members WHERE temp_role_until IS NOT NULL AND temp_role_until <= NOW() LIMIT 20")->fetchAll();
+            foreach ($expRoles as $er) {
+                $ep = (int)$er['peer_id'];
+                $eu = (int)$er['vk_id'];
+                $oldR = getRoleName($pdo, $ep, (int)$er['role_priority']);
+                $pdo->prepare("UPDATE bot_chat_members SET role_priority = 0, temp_role_until = NULL WHERE peer_id = ? AND vk_id = ?")->execute([$ep, $eu]);
+                sendMessage($ep, "⏳ Срок временной роли «{$oldR}» истёк.\n👤 Пользователь: " . formatUserMention($pdo, $ep, $eu) . " переведён в Участники.");
+            }
+
+            // Плановые автоуведомления (!timeuved / !gtimeuvedg)
             $timers = $pdo->query("SELECT * FROM bot_timers WHERE is_active = 1")->fetchAll();
             $now = time();
             $curHM = date('H:i');
@@ -54,16 +66,30 @@ while (true) {
                     if ($tPeer > 0) {
                         sendMessage($tPeer, "⏰ Напоминание:\n" . $t['message_text']);
                     } else {
-                        foreach ($pdo->query("SELECT peer_id FROM bot_chats WHERE peer_id > 2000000000")->fetchAll(PDO::FETCH_COLUMN) as $cp) {
-                            sendMessage((int)$cp, "📢 Автоуведомление:\n" . $t['message_text']);
+                        $allChats = $pdo->query("SELECT peer_id FROM bot_chats WHERE peer_id > 2000000000")->fetchAll(PDO::FETCH_COLUMN);
+                        $calls = [];
+                        foreach ($allChats as $cp) {
+                            $calls[] = [
+                                'method' => 'messages.send',
+                                'params' => [
+                                    'peer_id'   => (int)$cp,
+                                    'message'   => "📢 Автоуведомление:\n" . $t['message_text'],
+                                    'random_id' => random_int(1, PHP_INT_MAX),
+                                ]
+                            ];
                         }
+                        vkApiMulti($calls, 10);
                     }
                 }
             }
         }
+
+        // 3. Раз в 10 минут чистим /tmp от старых кэш-файлов (чтобы контейнер не забивал RAM)
+        if ($tick % 40 === 0) {
+            cleanupTmpCache();
+        }
     } catch (Throwable $e) {
         file_put_contents('php://stderr', "[WORKER ERROR] " . $e->getMessage() . PHP_EOL);
-        // При обрыве БД сбрасываем соединение, чтобы на следующем тике переподключиться
         try { getDB(true); } catch (Throwable $ignore) {}
     }
 
