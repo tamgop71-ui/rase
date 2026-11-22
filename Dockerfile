@@ -5,14 +5,13 @@ RUN docker-php-ext-install pdo pdo_mysql opcache
 RUN { \
     echo 'opcache.enable=1'; \
     echo 'opcache.enable_cli=1'; \
-    echo 'opcache.memory_consumption=64'; \
-    echo 'opcache.max_accelerated_files=2000'; \
+    echo 'opcache.memory_consumption=32'; \
+    echo 'opcache.max_accelerated_files=1000'; \
     echo 'opcache.validate_timestamps=0'; \
-    echo 'opcache.jit_buffer_size=32M'; \
-    echo 'opcache.jit=tracing'; \
+    echo 'opcache.jit=0'; \
 } > /usr/local/etc/php/conf.d/opcache-recommended.ini
 
-ENV PHP_CLI_SERVER_WORKERS=8
+ENV PHP_CLI_SERVER_WORKERS=2
 
 WORKDIR /app
 COPY . /app
