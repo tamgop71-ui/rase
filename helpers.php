@@ -98,7 +98,7 @@ function refreshChatTitle(PDO $pdo, int $peerId): string {
 /**
  * Быстрая загрузка контекста за 1 SELECT + 1 объединённый multi-table UPDATE
  */
-function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = '', bool $hasSticker = false): array {
+function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = '', bool $hasSticker = false, bool $deferStatsUpdate = false): array {
     $charLen = mb_strlen($text);
     $stickerInc = $hasSticker ? 1 : 0;
     $hasActivity = ($text !== '' || $hasSticker);
@@ -162,50 +162,29 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
         $needRefetch = true;
     }
 
+    $pendingStats = null;
     if ($needRefetch) {
         $stmt->execute([$vkId, $peerId]);
         $row = $stmt->fetch() ?: [];
     } elseif ($hasActivity) {
         $sameDay = (($row['daily_date'] ?? '') === $today);
-        if ($sameDay) {
-            $pdo->prepare("
-                UPDATE bot_users u
-                JOIN bot_chats c ON c.peer_id = ?
-                JOIN bot_chat_members m ON m.peer_id = c.peer_id AND m.vk_id = u.vk_id
-                SET u.total_messages = u.total_messages + 1,
-                    u.total_chars = u.total_chars + ?,
-                    u.total_stickers = u.total_stickers + ?,
-                    u.daily_msgs = u.daily_msgs + 1,
-                    c.total_messages = c.total_messages + 1,
-                    m.messages_count = m.messages_count + 1,
-                    m.chars_count = m.chars_count + ?,
-                    m.stickers_count = m.stickers_count + ?,
-                    m.last_active_at = NOW()
-                WHERE u.vk_id = ?
-            ")->execute([$peerId, $charLen, $stickerInc, $charLen, $stickerInc, $vkId]);
-        } else {
-            $pdo->prepare("
-                UPDATE bot_users u
-                JOIN bot_chats c ON c.peer_id = ?
-                JOIN bot_chat_members m ON m.peer_id = c.peer_id AND m.vk_id = u.vk_id
-                SET u.total_messages = u.total_messages + 1,
-                    u.total_chars = u.total_chars + ?,
-                    u.total_stickers = u.total_stickers + ?,
-                    u.daily_msgs = 1,
-                    u.daily_games = 0,
-                    u.daily_date = ?,
-                    u.quest_claimed = 0,
-                    c.total_messages = c.total_messages + 1,
-                    m.messages_count = m.messages_count + 1,
-                    m.chars_count = m.chars_count + ?,
-                    m.stickers_count = m.stickers_count + ?,
-                    m.last_active_at = NOW()
-                WHERE u.vk_id = ?
-            ")->execute([$peerId, $charLen, $stickerInc, $today, $charLen, $stickerInc, $vkId]);
+        $pendingStats = [
+            'peer_id'     => $peerId,
+            'vk_id'       => $vkId,
+            'char_len'    => $charLen,
+            'sticker_inc' => $stickerInc,
+            'same_day'    => $sameDay,
+            'today'       => $today,
+        ];
+        if (!$sameDay) {
             $row['daily_msgs'] = 0;
             $row['daily_games'] = 0;
             $row['daily_date'] = $today;
             $row['quest_claimed'] = 0;
+        }
+        if (!$deferStatsUpdate) {
+            flushPendingStats($pdo, ['pending_stats' => $pendingStats]);
+            $pendingStats = null;
         }
     }
 
@@ -292,7 +271,55 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
     $em = !empty($member['emoji']) ? $member['emoji'] . ' ' : '';
     $GLOBALS['_mention_cache']["{$peerId}:{$vkId}"] = "[id{$vkId}|{$em}{$disp}]";
 
-    return ['global' => $global, 'chat' => $chat, 'member' => $member];
+    return ['global' => $global, 'chat' => $chat, 'member' => $member, 'pending_stats' => $pendingStats];
+}
+
+
+/**
+ * Отложенная запись счётчиков сообщений ПОСЛЕ отправки ответа пользователю в VK.
+ * Убирает задержку записи MySQL и ожидания блокировок строк из времени ответа бота.
+ */
+function flushPendingStats(PDO $pdo, array &$ctx): void {
+    $ps = $ctx['pending_stats'] ?? null;
+    if (!is_array($ps)) return;
+    $ctx['pending_stats'] = null;
+
+    if (!empty($ps['same_day'])) {
+        $pdo->prepare("
+            UPDATE bot_users u
+            JOIN bot_chats c ON c.peer_id = ?
+            JOIN bot_chat_members m ON m.peer_id = c.peer_id AND m.vk_id = u.vk_id
+            SET u.total_messages = u.total_messages + 1,
+                u.total_chars = u.total_chars + ?,
+                u.total_stickers = u.total_stickers + ?,
+                u.daily_msgs = u.daily_msgs + 1,
+                c.total_messages = c.total_messages + 1,
+                m.messages_count = m.messages_count + 1,
+                m.chars_count = m.chars_count + ?,
+                m.stickers_count = m.stickers_count + ?,
+                m.last_active_at = NOW()
+            WHERE u.vk_id = ?
+        ")->execute([$ps['peer_id'], $ps['char_len'], $ps['sticker_inc'], $ps['char_len'], $ps['sticker_inc'], $ps['vk_id']]);
+    } else {
+        $pdo->prepare("
+            UPDATE bot_users u
+            JOIN bot_chats c ON c.peer_id = ?
+            JOIN bot_chat_members m ON m.peer_id = c.peer_id AND m.vk_id = u.vk_id
+            SET u.total_messages = u.total_messages + 1,
+                u.total_chars = u.total_chars + ?,
+                u.total_stickers = u.total_stickers + ?,
+                u.daily_msgs = 1,
+                u.daily_games = 0,
+                u.daily_date = ?,
+                u.quest_claimed = 0,
+                c.total_messages = c.total_messages + 1,
+                m.messages_count = m.messages_count + 1,
+                m.chars_count = m.chars_count + ?,
+                m.stickers_count = m.stickers_count + ?,
+                m.last_active_at = NOW()
+            WHERE u.vk_id = ?
+        ")->execute([$ps['peer_id'], $ps['char_len'], $ps['sticker_inc'], $ps['today'], $ps['char_len'], $ps['sticker_inc'], $ps['vk_id']]);
+    }
 }
 
 function formatUserMention(PDO $pdo, int $peerId, int $vkId): string {

@@ -35,28 +35,40 @@ define('DB_PASS', trim((string)(getenv('DB_PASS') ?: '')));
  */
 function getDB(bool $forceReconnect = false): PDO {
     static $pdo = null;
-    static $lastActivity = 0;
 
     if ($forceReconnect) {
         $pdo = null;
     }
-
     if ($pdo !== null) {
-        $now = time();
-        if (($now - $lastActivity) >= 20) {
-            try {
-                $pdo->query('SELECT 1');
-                $lastActivity = $now;
-                return $pdo;
-            } catch (Throwable $e) {
-                $pdo = null;
-            }
-        } else {
-            return $pdo;
-        }
+        return $pdo;
     }
 
     $dsn = sprintf("mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4", DB_HOST, DB_PORT, DB_NAME);
+    $hbFile = '/tmp/db_hb_' . getmypid() . '.txt';
+    $now = time();
+
+    // В обычном режиме используем persistent-пул (0 мс на TCP+Auth), но при простое >18с проверяем живость сокета
+    if (!$forceReconnect) {
+        try {
+            $pdo = new PDO($dsn, DB_USER, DB_PASS, [
+                PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES   => false,
+                PDO::ATTR_TIMEOUT            => 3,
+                PDO::ATTR_PERSISTENT         => true,
+            ]);
+            $lastHb = is_file($hbFile) ? (int)@file_get_contents($hbFile) : 0;
+            if (($now - $lastHb) >= 18) {
+                $pdo->query('SELECT 1');
+            }
+            @file_put_contents($hbFile, (string)$now);
+            return $pdo;
+        } catch (Throwable $e) {
+            // Сокет в пуле протух — мгновенно переходим на свежее чистое соединение
+            $pdo = null;
+        }
+    }
+
     $options = [
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
@@ -69,11 +81,11 @@ function getDB(bool $forceReconnect = false): PDO {
     for ($attempt = 1; $attempt <= 2; $attempt++) {
         try {
             $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
-            $lastActivity = time();
+            @file_put_contents($hbFile, (string)time());
             return $pdo;
         } catch (PDOException $e) {
             $lastErr = $e;
-            usleep(150000); // 150 мс пауза перед повторной попыткой
+            usleep(120000);
         }
     }
 
@@ -130,7 +142,7 @@ function cacheDel(string $key): void {
  */
 function cacheClearAll(): int {
     $removed = 0;
-    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/st_*.txt', '/tmp/rep_*.txt'];
+    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/st_*.txt', '/tmp/rep_*.txt', '/tmp/db_hb_*.txt'];
     foreach ($patterns as $pat) {
         $list = glob($pat);
         if (!$list) continue;
@@ -143,7 +155,7 @@ function cacheClearAll(): int {
 
 function cleanupTmpCache(): void {
     $now = time();
-    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/rep_*.txt'];
+    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/rep_*.txt', '/tmp/db_hb_*.txt'];
     foreach ($patterns as $pat) {
         $list = glob($pat);
         if (!$list) continue;
@@ -186,6 +198,7 @@ function vkApi(string $method, array $params = []): array {
                 CURLOPT_LOW_SPEED_TIME    => 4,
                 CURLOPT_TCP_NODELAY       => 1,
                 CURLOPT_DNS_CACHE_TIMEOUT => 3600,
+                CURLOPT_SSL_SESSIONID_CACHE => 1,
                 CURLOPT_IPRESOLVE         => CURL_IPRESOLVE_V4,
                 CURLOPT_TCP_KEEPALIVE     => 1,
                 CURLOPT_FORBID_REUSE      => false,
@@ -255,6 +268,7 @@ function vkApiMulti(array $calls, int $concurrency = 10): array {
                 CURLOPT_LOW_SPEED_TIME    => 4,
                 CURLOPT_TCP_NODELAY       => 1,
                 CURLOPT_DNS_CACHE_TIMEOUT => 3600,
+                CURLOPT_SSL_SESSIONID_CACHE => 1,
                 CURLOPT_IPRESOLVE         => CURL_IPRESOLVE_V4,
                 CURLOPT_HTTP_VERSION      => CURL_HTTP_VERSION_2_0,
                 CURLOPT_ENCODING          => '',

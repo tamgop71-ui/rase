@@ -5,7 +5,6 @@ $GLOBALS['_req_start'] = microtime(true);
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/helpers.php';
-require_once __DIR__ . '/commands.php';
 
 // Healthcheck для мониторинга контейнера без нагрузки на БД
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
@@ -180,7 +179,7 @@ if ($data['type'] === 'message_new') {
         }
 
         // 2.2. Быстрый контекст (1 SELECT + 1 multi-table UPDATE)
-        $ctx = ensureUserAndMember($pdo, $peerId, $fromId, $text, $hasSticker);
+        $ctx = ensureUserAndMember($pdo, $peerId, $fromId, $text, $hasSticker, true);
         $isSuper = ((int)$ctx['global']['is_superadmin'] === 1);
         $myPriority = $isSuper ? 100 : (int)$ctx['member']['role_priority'];
 
@@ -295,8 +294,8 @@ if ($data['type'] === 'message_new') {
             }
         }
 
-        // 2.7. Разбор команд с префиксами: ! / . + -
-        if ($text !== '' && preg_match('/^[!\/\.\+\-]([\wа-яё]+)(?:\s+(.*))?$/isu', $text, $matches)) {
+        // 2.7. Разбор команд с префиксами: ! / . + - (с ленивой загрузкой commands.php и отложенной записью счётчиков)
+        if ($text !== '' && preg_match('/^([!\/\.\+\-])([\wа-яё]+)(?:\s+(.*))?$/isu', $text, $matches)) {
             if (!$isSuper && (int)($ctx['global']['is_bot_banned'] ?? 0) === 1) {
                 exit('ok');
             }
@@ -304,7 +303,9 @@ if ($data['type'] === 'message_new') {
                 sendMessage($peerId, "🛠 Бот временно находится на техническом обслуживании. Команды скоро будут доступны.");
                 exit('ok');
             }
-            executeCommand($pdo, mb_strtolower($matches[1]), trim($matches[2] ?? ''), $peerId, $fromId, $ctx, $msg);
+            require_once __DIR__ . '/commands.php';
+            executeCommand($pdo, mb_strtolower($matches[2]), trim($matches[3] ?? ''), $peerId, $fromId, $ctx, $msg, $matches[1]);
+            flushPendingStats($pdo, $ctx);
             exit('ok');
         }
 
@@ -339,6 +340,8 @@ if ($data['type'] === 'message_new') {
                 }
             }
         }
+
+        flushPendingStats($pdo, $ctx);
     } catch (Throwable $e) {
         if (isDbGoneAway($e)) {
             file_put_contents('php://stderr', "[DB RECONNECT] Lost connection, retrying request..." . PHP_EOL);
@@ -354,8 +357,9 @@ if ($data['type'] === 'message_new') {
                         if (!empty($payload['cmd']) && is_string($payload['cmd'])) $text = $payload['cmd'];
                     }
                     $ctx = ensureUserAndMember($pdo, $peerId, $fromId, $text, false);
-                    if ($text !== '' && preg_match('/^[!\/\.\+\-]([\wа-яё]+)(?:\s+(.*))?$/isu', $text, $matches)) {
-                        executeCommand($pdo, mb_strtolower($matches[1]), trim($matches[2] ?? ''), $peerId, $fromId, $ctx, $msg);
+                    if ($text !== '' && preg_match('/^([!\/\.\+\-])([\wа-яё]+)(?:\s+(.*))?$/isu', $text, $matches)) {
+                        require_once __DIR__ . '/commands.php';
+                        executeCommand($pdo, mb_strtolower($matches[2]), trim($matches[3] ?? ''), $peerId, $fromId, $ctx, $msg, $matches[1]);
                     }
                 }
             } catch (Throwable $e2) {

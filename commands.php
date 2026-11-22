@@ -2,13 +2,11 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/helpers.php';
-require_once __DIR__ . '/commands_fun.php';
-require_once __DIR__ . '/commands_mod.php';
 
 /**
  * Полный словарь синонимов команд (RU + EN) -> каноническое имя
  */
-function resolveCanonicalCommand(string $rawCmd): string {
+function getCommandAliasMap(): array {
     static $map = [
         // Общие (0)
         'помощь' => 'help', 'команды' => 'help', 'help' => 'help', 'cmds' => 'help', 'commands' => 'help', 'меню' => 'help',
@@ -233,6 +231,11 @@ function resolveCanonicalCommand(string $rawCmd): string {
 
 
     ];
+    return $map;
+}
+
+function resolveCanonicalCommand(string $rawCmd): string {
+    $map = getCommandAliasMap();
     return $map[$rawCmd] ?? $rawCmd;
 }
 
@@ -283,10 +286,19 @@ function getDefaultCmdPriority(string $cmd): int {
 /**
  * Единая точка входа выполнения команды
  */
-function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int $fromId, array $ctx, array $msg): void {
-    $cmd = resolveCanonicalCommand($rawCmd);
+function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int $fromId, array $ctx, array $msg, string $prefix = '!'): void {
+    $aliasMap = getCommandAliasMap();
     $isSuper = ((int)$ctx['global']['is_superadmin'] === 1) || hasSuperAccess($pdo, $fromId);
     $myPriority = $isSuper ? 100 : (int)$ctx['member']['role_priority'];
+
+    // Команда не найдена -> лениво подгружаем модуль подсказок и предлагаем самую похожую команду
+    if (!isset($aliasMap[$rawCmd])) {
+        require_once __DIR__ . '/commands_suggest.php';
+        suggestClosestCommand($pdo, $prefix, $rawCmd, $args, $peerId, $myPriority, $isSuper);
+        return;
+    }
+
+    $cmd = $aliasMap[$rawCmd];
 
     $defaultReq = getDefaultCmdPriority($cmd);
     if ($defaultReq === 999) {
@@ -298,7 +310,6 @@ function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int
             return;
         }
     } else {
-        // !stats без аргументов или с VIP доступна любому
         if ($cmd === 'stats' && (trim($args) === '' || (int)$ctx['global']['is_vip'] === 1)) {
             $reqPriority = 0;
         } else {
@@ -315,19 +326,29 @@ function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int
         }
     }
 
-    // Проверка включены ли игры
-    $gameCmds = [
-        'bonus', 'work', 'bank', 'deposit', 'withdraw', 'rob', 'casino', 'slots', 'roulette',
-        'pay', 'duel', 'citizenship', 'mycountry', 'countries', 'marry', 'divorce', 'marriages',
-        'kiss', 'hug', 'try', 'iznas', 'minet', 'beer', 'roll', 'ball', 'choose', 'rep', 'case', 'promo', 'quests', 'shop', 'coin', 'clan', 'clans'
+    static $gameCmds = [
+        'bonus' => true, 'work' => true, 'bank' => true, 'deposit' => true, 'withdraw' => true,
+        'rob' => true, 'casino' => true, 'slots' => true, 'roulette' => true, 'pay' => true,
+        'duel' => true, 'citizenship' => true, 'mycountry' => true, 'countries' => true,
+        'marry' => true, 'divorce' => true, 'marriages' => true, 'kiss' => true, 'hug' => true,
+        'try' => true, 'iznas' => true, 'minet' => true, 'beer' => true, 'roll' => true,
+        'ball' => true, 'choose' => true, 'rep' => true, 'case' => true, 'promo' => true,
+        'quests' => true, 'shop' => true, 'coin' => true, 'clan' => true, 'clans' => true
     ];
-    if (in_array($cmd, $gameCmds, true) && (int)($ctx['chat']['games_enabled'] ?? 1) === 0 && !$isSuper) {
+    if (isset($gameCmds[$cmd]) && (int)($ctx['chat']['games_enabled'] ?? 1) === 0 && !$isSuper) {
         sendMessage($peerId, "🎮 Экономика и развлекательные команды отключены владельцем (!games).");
         return;
     }
 
-    if (handleFunAndGeneralCommands($pdo, $cmd, $args, $peerId, $fromId, $ctx, $msg, $myPriority, $isSuper)) {
-        return;
+    // Ленивая подгрузка: загружаем ТОЛЬКО тот модуль (fun или mod), который нужен для этой команды
+    static $funSet = ['admins' => true, 'afk' => true, 'atop' => true, 'ball' => true, 'bank' => true, 'beer' => true, 'bonus' => true, 'case' => true, 'casino' => true, 'choose' => true, 'citizenship' => true, 'clan' => true, 'clans' => true, 'coin' => true, 'countries' => true, 'deposit' => true, 'divorce' => true, 'duel' => true, 'emoji' => true, 'enick' => true, 'help' => true, 'hug' => true, 'iznas' => true, 'kiss' => true, 'marriages' => true, 'marry' => true, 'mention_off' => true, 'mention_on' => true, 'mentions' => true, 'minet' => true, 'mycountry' => true, 'online' => true, 'pay' => true, 'ping' => true, 'poll' => true, 'profile' => true, 'promo' => true, 'quests' => true, 'remind' => true, 'reminders' => true, 'rep' => true, 'rob' => true, 'roles' => true, 'roll' => true, 'roulette' => true, 'rules' => true, 'shop' => true, 'slots' => true, 'start' => true, 'stickers' => true, 'thereid' => true, 'top' => true, 'try' => true, 'withdraw' => true, 'work' => true];
+    if (isset($funSet[$cmd])) {
+        require_once __DIR__ . '/commands_fun.php';
+        if (handleFunAndGeneralCommands($pdo, $cmd, $args, $peerId, $fromId, $ctx, $msg, $myPriority, $isSuper)) {
+            return;
+        }
     }
+
+    require_once __DIR__ . '/commands_mod.php';
     handleModAndAdminCommands($pdo, $cmd, $args, $peerId, $fromId, $ctx, $msg, $myPriority, $isSuper);
 }
