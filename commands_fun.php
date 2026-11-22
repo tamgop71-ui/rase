@@ -10,15 +10,8 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
         // 1. ОБЩИЕ КОМАНДЫ, НАПОМИНАЛКИ, AFK, ОПРОСЫ
         // ==========================================
         case 'ping':
-            $evDelay = max(0, time() - (int)($msg['date'] ?? time()));
-            $procMs = isset($GLOBALS['_req_start']) ? max(1, (int)round((microtime(true) - $GLOBALS['_req_start']) * 1000)) : 1;
-            $tApi = microtime(true);
-            $res = sendMessage($peerId, "⚙️ Понг! Задержка события: {$evDelay} с | Обработка: {$procMs} мс | API: ...");
-            $apiMs = number_format((microtime(true) - $tApi) * 1000, 2, '.', '');
-            $sentCmid = (int)($res['response']['cmid'] ?? $res['response']['conversation_message_id'] ?? 0);
-            if ($sentCmid > 0) {
-                editMessage($peerId, $sentCmid, "⚙️ Понг! Задержка события: {$evDelay} с | Обработка: {$procMs} мс | API: {$apiMs} мс");
-            }
+            $totalMs = isset($GLOBALS['_req_start']) ? round((microtime(true) - $GLOBALS['_req_start']) * 1000, 1) : 1.0;
+            sendMessage($peerId, "🏓 Понг! Бот RASE RUSSIA работает исправно.\n⚡ Скорость ответа: {$totalMs} мс\n🕒 Сервер: " . date('d.m.Y H:i:s') . " МСК");
             return true;
 
         case 'start':
@@ -60,7 +53,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "🎰 Азарт и Мини-игры:\n"
                      . "• !казино [ставка] | !слоты [ставка]\n"
                      . "• !рулетка [красное/черное/зеленое] [ставка]\n"
-                     . "• !дуэль [ID] [ставка] | !монетка [орёл/решка] [ставка] | !21 [ставка]\n"
+                     . "• !дуэль [ID] [ставка] | !монетка [орёл/решка] [ставка]\n"
                      . "• !рандом (!roll) | !шар | !выбери\n\n"
                      . "❤️ Социальное и РП:\n"
                      . "• !гражданство [страна] / !страна / !страны\n"
@@ -81,7 +74,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "• !бан [ID] (дни) (причина) / !унбан [ID] / !banlist\n"
                      . "• !role [ID] [приоритет/название] / !removerole [ID]\n"
                      . "• !помощник [ID] / !роли\n"
-                     . "• !тишина [время / выкл] | !слоумод [сек] | !логи [кол-во]\n"
+                     . "• !тишина [время / выкл] | !слоумод [сек] — контроль чата\n"
                      . "• !очистить [ID / кол-во] — удалить последние сообщения\n"
                      . "• !понику [часть ника] — поиск по нику\n"
                      . "• !gzov / !gkick / !gsnick / !грник / !gremoverole";
@@ -103,13 +96,12 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             } elseif ($cat === 'owner') {
                 $txt = "👑 Владелец беседы (100) и Супер-доступ (/addws):\n\n"
                      . "• !setup / !settings / !gsettings / !gedit\n"
-                     . "• !антислив | !антирейд | !капча | !антистикер — защита чата\n"
-                     . "• !гобъявление [текст] — рассылка по всему объединению\n"
+                     . "• !антислив (!antidrain) | !антирейд (!antiraid) — защита чата\n"
                      . "• !automod / !антифлуд / !games / !уведы\n"
                      . "• !unity / !unites / !createunity / !addunity / !editunity / !removeunity / !deleteunity\n"
                      . "• !sync / !spec / !gspec / !wipe / !migration\n"
                      . "• !editcmd / !geditcmd / !owner [ID] / !никэмодзи\n"
-                     . "• Супер-доступ (/addws): /sysban, /sysunban, /syskick, /sysmute, /sysrole, /giverub, /givesoo, /sysinfo, /sysbroadcast, !addws, !vip, !setlog, !zovvv, !gzovg, !gtimeuvedg, !getdialog, !reportedit, !listunities, !listen, !chatlist, !userchats, !ahistory, !checkban";
+                     . "• Супер-доступ: /sysban, /sysunban, /syskick, /sysrole, /sysnick, /giverub, /givesoo, /broadcast, /botban, /botunban, /sysstats, /maintenance, !addws, !vip, !setlog, !zovvv, !gzovg, !gtimeuvedg, !listunities, !listen, !chatlist, !userchats, !ahistory, !checkban";
             } else {
                 $txt = "📋 Справка по командам RASE RUSSIA BOT:\n"
                      . "Префиксы: ! / . + - (на русском и английском)\n\n"
@@ -118,8 +110,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "• !напомни лс [время] [текст] — личное напоминание в ЛС\n"
                      . "• !напоминания — список ваших активных напоминаний\n"
                      . "• !опрос [Вопрос | Вар 1 | Вар 2] — создать голосование\n"
-                     . "• !афк (причина) — режим «отошёл» | !био [текст] — статус в профиль\n"
-                     . "• !кальк [выражение] — быстрый калькулятор\n"
+                     . "• !афк (причина) — режим «отошёл»\n"
                      . "• !правила / !роли / !админы / !онлайн / !thereid\n"
                      . "• /report [текст] — отправить тикет администрации\n\n"
                      . "👇 Выберите раздел на кнопках ниже:";
@@ -229,20 +220,6 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 }
                 $lines[] = "\n👥 Всего голосов: {$totalVotes}";
                 sendMessage($peerId, implode("\n", $lines), makeInlineKeyboard($kbRows));
-                return true;
-            }
-
-            // Закрытие опроса автором или админом
-            if (preg_match('/^(?:закрыть|close)\s+(\d+)$/iu', $raw, $cm)) {
-                $pid = (int)$cm[1];
-                $stP = $pdo->prepare("SELECT author_vk_id FROM bot_polls WHERE id = ? AND peer_id = ?");
-                $stP->execute([$pid, $peerId]);
-                $auth = $stP->fetchColumn();
-                if ($auth === false) { sendMessage($peerId, "❌ Опрос #{$pid} не найден."); return true; }
-                if ((int)$auth !== $fromId && $myPriority < 40 && !$isSuper) { sendMessage($peerId, "⛔ Закрыть опрос может только автор или модератор."); return true; }
-                $pdo->prepare("DELETE FROM bot_polls WHERE id = ?")->execute([$pid]);
-                $pdo->prepare("DELETE FROM bot_poll_votes WHERE poll_id = ?")->execute([$pid]);
-                sendMessage($peerId, "🔒 Опрос #{$pid} закрыт.");
                 return true;
             }
 
@@ -375,7 +352,6 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
 
             $txt = "👤 Профиль {$mention}{$vipBadge}:\n"
                  . "━━━━━━━━━━━━━━━━━━\n"
-                 . (!empty($g['bio']) ? "💬 Статус: {$g['bio']}\n" : "")
                  . "🛡 Роль: {$rName} ({$m['role_priority']})\n"
                  . "💰 Наличные: " . formatMoney((int)$g['balance']) . "\n"
                  . "🏦 В банке: " . formatMoney((int)$g['bank_balance']) . "\n"
@@ -491,21 +467,15 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
 
         case 'bonus':
             $lastBonus = $ctx['global']['last_bonus'] ?? null;
-            $nowTs = time();
-            if ($lastBonus !== null && ($nowTs - strtotime($lastBonus)) < 86400) {
-                $rem = 86400 - ($nowTs - strtotime($lastBonus));
+            if ($lastBonus !== null && (time() - strtotime($lastBonus)) < 86400) {
+                $rem = 86400 - (time() - strtotime($lastBonus));
                 $h = (int)floor($rem / 3600); $min = (int)floor(($rem % 3600) / 60);
                 sendMessage($peerId, "⏳ Вы уже забирали бонус. Следующий через {$h} ч. {$min} мин.");
                 return true;
             }
-            $curStreak = (int)($ctx['global']['bonus_streak'] ?? 0);
-            $newStreak = ($lastBonus !== null && ($nowTs - strtotime($lastBonus)) <= 172800) ? min(11, $curStreak + 1) : 1;
-            $base = ((int)$ctx['global']['is_vip'] === 1) ? 2500 : 1000;
-            $mult = 1.0 + (($newStreak - 1) * 0.1);
-            $reward = (int)round($base * $mult);
-            $pdo->prepare("UPDATE bot_users SET balance = balance + ?, last_bonus = NOW(), bonus_streak = ? WHERE vk_id = ?")->execute([$reward, $newStreak, $fromId]);
-            $streakNote = $newStreak > 1 ? "\n🔥 Серия входов: {$newStreak} дн. (множитель x" . number_format($mult, 1) . ")" : "";
-            sendMessage($peerId, "🎁 Вы получили ежедневный бонус: " . formatMoney($reward) . "!{$streakNote}");
+            $reward = ((int)$ctx['global']['is_vip'] === 1) ? 2500 : 1000;
+            $pdo->prepare("UPDATE bot_users SET balance = balance + ?, last_bonus = NOW() WHERE vk_id = ?")->execute([$reward, $fromId]);
+            sendMessage($peerId, "🎁 Вы получили ежедневный бонус: " . formatMoney($reward) . "!");
             return true;
 
         case 'work':
@@ -771,7 +741,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             }
             $e = mb_substr(trim($args), 0, 8);
             $pdo->prepare("UPDATE bot_chat_members SET emoji = ? WHERE peer_id = ? AND vk_id = ?")->execute([$e !== '' ? $e : null, $peerId, $fromId]);
-            invalidateMemberCache($peerId, $fromId);
+            unset($GLOBALS['_mention_cache']["{$peerId}:{$fromId}"]);
             sendMessage($peerId, $e !== '' ? "🌟 Ваш эмодзи установлен: {$e}" : "🗑 Эмодзи удалён.");
             return true;
 
@@ -781,7 +751,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !никэмодзи [ID/упоминание] [смайл]"); return true; }
             ensureUserAndMember($pdo, $peerId, $targetId);
             $pdo->prepare("UPDATE bot_chat_members SET emoji = ? WHERE peer_id = ? AND vk_id = ?")->execute([$e !== '' ? $e : null, $peerId, $targetId]);
-            invalidateMemberCache($peerId, $targetId);
+            unset($GLOBALS['_mention_cache']["{$peerId}:{$targetId}"]);
             sendMessage($peerId, "✅ Эмодзи обновлён: " . formatUserMention($pdo, $peerId, $targetId));
             return true;
 
@@ -1053,71 +1023,8 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
 
             if (in_array(mb_strtolower($raw), ['выйти', 'leave'], true)) {
                 if ($myClanId <= 0) { sendMessage($peerId, "⚠️ Вы не состоите в клане."); return true; }
-                $stL = $pdo->prepare("SELECT leader_vk_id FROM bot_clans WHERE id = ?");
-                $stL->execute([$myClanId]);
-                if ((int)$stL->fetchColumn() === $fromId) {
-                    sendMessage($peerId, "👑 Вы глава семьи! Чтобы распустить её, введите: !клан удалить");
-                    return true;
-                }
                 $pdo->prepare("UPDATE bot_users SET clan_id = NULL WHERE vk_id = ?")->execute([$fromId]);
                 sendMessage($peerId, "🚪 Вы покинули семью.");
-                return true;
-            }
-
-            if (in_array(mb_strtolower($raw), ['удалить', 'распустить', 'delete', 'disband'], true)) {
-                if ($myClanId <= 0) { sendMessage($peerId, "⚠️ Вы не состоите в клане."); return true; }
-                $stL = $pdo->prepare("SELECT leader_vk_id, treasury, name FROM bot_clans WHERE id = ?");
-                $stL->execute([$myClanId]);
-                $cl = $stL->fetch();
-                if (!$cl || (int)$cl['leader_vk_id'] !== $fromId) {
-                    sendMessage($peerId, "⛔ Распустить семью может только её глава.");
-                    return true;
-                }
-                $treasury = (int)$cl['treasury'];
-                $pdo->prepare("UPDATE bot_users SET clan_id = NULL WHERE clan_id = ?")->execute([$myClanId]);
-                if ($treasury > 0) {
-                    $pdo->prepare("UPDATE bot_users SET balance = balance + ? WHERE vk_id = ?")->execute([$treasury, $fromId]);
-                }
-                $pdo->prepare("DELETE FROM bot_clans WHERE id = ?")->execute([$myClanId]);
-                sendMessage($peerId, "🗑 Семья «{$cl['name']}» распущена." . ($treasury > 0 ? " Общак (" . formatMoney($treasury) . ") возвращён главе." : ""));
-                return true;
-            }
-
-            if (preg_match('/^(?:снять|вывести|withdraw)\\s+(\\S+)$/iu', $raw, $m)) {
-                if ($myClanId <= 0) { sendMessage($peerId, "⚠️ Вы не состоите в клане."); return true; }
-                $stL = $pdo->prepare("SELECT leader_vk_id, treasury FROM bot_clans WHERE id = ?");
-                $stL->execute([$myClanId]);
-                $cl = $stL->fetch();
-                if (!$cl || (int)$cl['leader_vk_id'] !== $fromId) {
-                    sendMessage($peerId, "⛔ Снимать деньги из общака может только глава семьи.");
-                    return true;
-                }
-                $tr = (int)$cl['treasury'];
-                $amt = parseAmount($m[1], $tr);
-                if ($amt === null || $amt <= 0 || $amt > $tr) {
-                    sendMessage($peerId, "⚠️ Неверная сумма (в общаке: " . formatMoney($tr) . ").");
-                    return true;
-                }
-                $pdo->prepare("UPDATE bot_clans SET treasury = treasury - ? WHERE id = ?")->execute([$amt, $myClanId]);
-                $pdo->prepare("UPDATE bot_users SET balance = balance + ? WHERE vk_id = ?")->execute([$amt, $fromId]);
-                sendMessage($peerId, "💰 Глава снял " . formatMoney($amt) . " из общака семьи.");
-                return true;
-            }
-
-            if (preg_match('/^(?:кик|исключить|kick)\\s+(.+)$/iu', $raw, $m)) {
-                if ($myClanId <= 0) { sendMessage($peerId, "⚠️ Вы не состоите в клане."); return true; }
-                $stL = $pdo->prepare("SELECT leader_vk_id FROM bot_clans WHERE id = ?");
-                $stL->execute([$myClanId]);
-                if ((int)$stL->fetchColumn() !== $fromId) {
-                    sendMessage($peerId, "⛔ Исключать участников может только глава семьи.");
-                    return true;
-                }
-                $kickArgs = trim($m[1]);
-                $tid = extractTargetUser($pdo, $peerId, $msg, $kickArgs);
-                if (!$tid || $tid === $fromId) { sendMessage($peerId, "⚠️ Укажите участника: !клан кик @упоминание"); return true; }
-                $stK = $pdo->prepare("UPDATE bot_users SET clan_id = NULL WHERE vk_id = ? AND clan_id = ?");
-                $stK->execute([$tid, $myClanId]);
-                sendMessage($peerId, $stK->rowCount() > 0 ? "👢 " . formatUserMention($pdo, $peerId, $tid) . " исключён из семьи." : "❌ Этот пользователь не состоит в вашей семье.");
                 return true;
             }
 
@@ -1157,141 +1064,6 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 $i++;
             }
             sendMessage($peerId, implode("\n", $lines));
-            return true;
-
-
-        case 'bio':
-            $bText = trim($args);
-            if ($bText === '') {
-                $cur = $ctx['global']['bio'] ?? null;
-                sendMessage($peerId, $cur ? "💬 Ваш текущий статус: {$cur}\nУдалить: !био del" : "💬 Установите статус в профиль: !био [текст до 100 символов]");
-                return true;
-            }
-            if (in_array(mb_strtolower($bText), ['del', 'удалить', 'сброс', 'off'], true)) {
-                $pdo->prepare("UPDATE bot_users SET bio = NULL WHERE vk_id = ?")->execute([$fromId]);
-                sendMessage($peerId, "🗑 Статус из профиля удалён.");
-                return true;
-            }
-            $clean = mb_substr($bText, 0, 100);
-            $pdo->prepare("UPDATE bot_users SET bio = ? WHERE vk_id = ?")->execute([$clean, $fromId]);
-            sendMessage($peerId, "✅ Статус в профиле обновлён: «{$clean}»");
-            return true;
-
-        case 'calc':
-            $expr = trim($args);
-            if ($expr === '') {
-                sendMessage($peerId, "🧮 Пример: !кальк (50000 * 1.15) / 2");
-                return true;
-            }
-            $res = evaluateMathExpr($expr);
-            if ($res === null) {
-                sendMessage($peerId, "❌ Некорректное выражение. Допустимы числа, скобки и знаки + - * / %");
-                return true;
-            }
-            $formatted = (floor($res) == $res) ? number_format($res, 0, '.', ' ') : rtrim(rtrim(number_format($res, 4, '.', ' '), '0'), '.');
-            sendMessage($peerId, "🧮 {$expr} = {$formatted}");
-            return true;
-
-        case 'blackjack':
-            $bjFile = "/tmp/bj_{$fromId}.json";
-            $sub = mb_strtolower(trim($args));
-
-            // Добор или остановка текущей партии
-            if (in_array($sub, ['hit', 'еще', 'ещё', 'stand', 'хватит', 'стоп'], true)) {
-                if (!is_file($bjFile)) {
-                    sendMessage($peerId, "🃏 У вас нет активной партии! Начать: !21 [ставка]");
-                    return true;
-                }
-                $game = json_decode((string)@file_get_contents($bjFile), true);
-                if (!$game || (time() - (int)$game['t']) > 300) {
-                    @unlink($bjFile);
-                    sendMessage($peerId, "🃏 Партия истекла. Начните новую: !21 [ставка]");
-                    return true;
-                }
-                $bet = (int)$game['bet'];
-                $pCards = $game['p'];
-                $dCards = $game['d'];
-
-                $sumCards = function(array $cards): int {
-                    $s = array_sum($cards);
-                    $aces = count(array_filter($cards, fn($c) => $c === 11));
-                    while ($s > 21 && $aces > 0) { $s -= 10; $aces--; }
-                    return $s;
-                };
-
-                if (in_array($sub, ['hit', 'еще', 'ещё'], true)) {
-                    $deck = [2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 11];
-                    $pCards[] = $deck[array_rand($deck)];
-                    $pSum = $sumCards($pCards);
-                    if ($pSum > 21) {
-                        @unlink($bjFile);
-                        sendMessage($peerId, "🃏 Вы добрали карту: [" . implode(', ', $pCards) . "] = {$pSum}\n💥 Перебор! Вы проиграли " . formatMoney($bet) . ".");
-                        return true;
-                    }
-                    if ($pSum === 21) {
-                        $sub = 'stand'; // Авто-стоп на 21
-                    } else {
-                        $game['p'] = $pCards;
-                        @file_put_contents($bjFile, json_encode($game));
-                        $kb = makeInlineKeyboard([[
-                            ['label' => '🃏 Ещё карту', 'payload' => ['cmd' => '!21 hit'], 'color' => 'primary'],
-                            ['label' => '✋ Хватит', 'payload' => ['cmd' => '!21 stand'], 'color' => 'positive']
-                        ]]);
-                        sendMessage($peerId, "🃏 Ваши карты: [" . implode(', ', $pCards) . "] = {$pSum}\n🎩 Карта дилера: [{$dCards[0]}, ?]", $kb);
-                        return true;
-                    }
-                }
-
-                // Остановка (ход дилера)
-                $deck = [2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 11];
-                while ($sumCards($dCards) < 17) {
-                    $dCards[] = $deck[array_rand($deck)];
-                }
-                $pSum = $sumCards($pCards);
-                $dSum = $sumCards($dCards);
-                @unlink($bjFile);
-
-                if ($dSum > 21 || $pSum > $dSum) {
-                    $win = $bet * 2;
-                    $pdo->prepare("UPDATE bot_users SET balance = balance + ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$win, $fromId]);
-                    sendMessage($peerId, "🃏 Ваши карты: [" . implode(', ', $pCards) . "] = {$pSum}\n🎩 Дилер: [" . implode(', ', $dCards) . "] = {$dSum}\n🏆 Победа! Выигрыш: +" . formatMoney($bet) . " (выплата " . formatMoney($win) . ").");
-                } elseif ($pSum === $dSum) {
-                    $pdo->prepare("UPDATE bot_users SET balance = balance + ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$bet, $fromId]);
-                    sendMessage($peerId, "🃏 Ваши карты: [" . implode(', ', $pCards) . "] = {$pSum}\n🎩 Дилер: [" . implode(', ', $dCards) . "] = {$dSum}\n🤝 Ничья! Ставка " . formatMoney($bet) . " возвращена.");
-                } else {
-                    $pdo->prepare("UPDATE bot_users SET daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$fromId]);
-                    sendMessage($peerId, "🃏 Ваши карты: [" . implode(', ', $pCards) . "] = {$pSum}\n🎩 Дилер: [" . implode(', ', $dCards) . "] = {$dSum}\n❌ Дилер выиграл. Вы проиграли " . formatMoney($bet) . ".");
-                }
-                return true;
-            }
-
-            // Новая партия !21 [ставка]
-            $bal = (int)$ctx['global']['balance'];
-            $bet = parseAmount($args, $bal);
-            if ($bet === null || $bet <= 0 || $bet > $bal) {
-                sendMessage($peerId, "🃏 Использование: !21 [ставка] (ваш баланс: " . formatMoney($bal) . ")");
-                return true;
-            }
-            $pdo->prepare("UPDATE bot_users SET balance = balance - ? WHERE vk_id = ?")->execute([$bet, $fromId]);
-            $deck = [2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 11];
-            $pCards = [$deck[array_rand($deck)], $deck[array_rand($deck)]];
-            $dCards = [$deck[array_rand($deck)], $deck[array_rand($deck)]];
-            $pSum = array_sum($pCards);
-            if ($pSum > 21) $pSum -= 10;
-
-            if ($pSum === 21) {
-                $win = (int)round($bet * 2.5);
-                $pdo->prepare("UPDATE bot_users SET balance = balance + ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$win, $fromId]);
-                sendMessage($peerId, "🃏 БЛЭКДЖЕК С РАЗДАЧИ! [" . implode(', ', $pCards) . "] = 21!\n🔥 Выплата x2.5: " . formatMoney($win) . "!");
-                return true;
-            }
-
-            @file_put_contents($bjFile, json_encode(['bet' => $bet, 'p' => $pCards, 'd' => $dCards, 't' => time()]));
-            $kb = makeInlineKeyboard([[
-                ['label' => '🃏 Ещё карту', 'payload' => ['cmd' => '!21 hit'], 'color' => 'primary'],
-                ['label' => '✋ Хватит', 'payload' => ['cmd' => '!21 stand'], 'color' => 'positive']
-            ]]);
-            sendMessage($peerId, "🃏 Партия в 21 на " . formatMoney($bet) . "!\n👤 Ваши карты: [" . implode(', ', $pCards) . "] = {$pSum}\n🎩 Карта дилера: [{$dCards[0]}, ?]", $kb);
             return true;
 
     }

@@ -6,7 +6,6 @@ CREATE TABLE IF NOT EXISTS `bot_users` (
     `vk_id` BIGINT UNSIGNED NOT NULL,
     `first_name` VARCHAR(64) NOT NULL DEFAULT 'Игрок',
     `last_name` VARCHAR(64) NOT NULL DEFAULT '',
-    `bio` VARCHAR(120) DEFAULT NULL,
     `global_nick` VARCHAR(64) DEFAULT NULL,
     `balance` BIGINT NOT NULL DEFAULT 1500,
     `bank_balance` BIGINT NOT NULL DEFAULT 0,
@@ -15,13 +14,13 @@ CREATE TABLE IF NOT EXISTS `bot_users` (
     `spouse_vk_id` BIGINT UNSIGNED DEFAULT NULL,
     `marriage_date` DATETIME DEFAULT NULL,
     `last_bonus` DATETIME DEFAULT NULL,
-    `bonus_streak` TINYINT UNSIGNED NOT NULL DEFAULT 0,
     `last_work` DATETIME DEFAULT NULL,
     `last_rob` DATETIME DEFAULT NULL,
     `rob_shield_until` DATETIME DEFAULT NULL,
     `daily_given_amount` BIGINT NOT NULL DEFAULT 0,
     `daily_given_date` DATE DEFAULT NULL,
     `is_superadmin` TINYINT(1) NOT NULL DEFAULT 0,
+    `is_bot_banned` TINYINT(1) NOT NULL DEFAULT 0,
     `is_vip` TINYINT(1) NOT NULL DEFAULT 0,
     `reputation` INT NOT NULL DEFAULT 0,
     `afk_reason` VARCHAR(128) DEFAULT NULL,
@@ -56,8 +55,6 @@ CREATE TABLE IF NOT EXISTS `bot_chats` (
     `antiflood_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `antidrain_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `antiraid_enabled` TINYINT(1) NOT NULL DEFAULT 0,
-    `captcha_enabled` TINYINT(1) NOT NULL DEFAULT 0,
-    `antisticker_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `slowmode_sec` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
     `mentions_enabled` TINYINT(1) NOT NULL DEFAULT 1,
     `listen_target_vk_id` BIGINT UNSIGNED DEFAULT NULL,
@@ -291,12 +288,6 @@ DROP PROCEDURE IF EXISTS `bot_safe_migrate`;
 DELIMITER $$
 CREATE PROCEDURE `bot_safe_migrate`()
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_users' AND COLUMN_NAME='bio') THEN
-        ALTER TABLE `bot_users` ADD COLUMN `bio` VARCHAR(120) DEFAULT NULL AFTER `last_name`;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_users' AND COLUMN_NAME='bonus_streak') THEN
-        ALTER TABLE `bot_users` ADD COLUMN `bonus_streak` TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER `last_bonus`;
-    END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_users' AND COLUMN_NAME='bank_balance') THEN
         ALTER TABLE `bot_users` ADD COLUMN `bank_balance` BIGINT NOT NULL DEFAULT 0 AFTER `balance`;
     END IF;
@@ -311,6 +302,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_users' AND COLUMN_NAME='rob_shield_until') THEN
         ALTER TABLE `bot_users` ADD COLUMN `rob_shield_until` DATETIME DEFAULT NULL AFTER `last_rob`;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_users' AND COLUMN_NAME='is_bot_banned') THEN
+        ALTER TABLE `bot_users` ADD COLUMN `is_bot_banned` TINYINT(1) NOT NULL DEFAULT 0 AFTER `is_superadmin`;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_users' AND COLUMN_NAME='is_vip') THEN
         ALTER TABLE `bot_users` ADD COLUMN `is_vip` TINYINT(1) NOT NULL DEFAULT 0 AFTER `is_superadmin`;
@@ -349,12 +343,6 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='antiraid_enabled') THEN
         ALTER TABLE `bot_chats` ADD COLUMN `antiraid_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `antidrain_enabled`;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='captcha_enabled') THEN
-        ALTER TABLE `bot_chats` ADD COLUMN `captcha_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `antiraid_enabled`;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='antisticker_enabled') THEN
-        ALTER TABLE `bot_chats` ADD COLUMN `antisticker_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `captcha_enabled`;
-    END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='slowmode_sec') THEN
         ALTER TABLE `bot_chats` ADD COLUMN `slowmode_sec` SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER `antiraid_enabled`;
     END IF;
@@ -380,4 +368,5 @@ INSERT IGNORE INTO `bot_countries` (`id`, `name`, `president_vk_id`) VALUES
 INSERT IGNORE INTO `bot_settings` (`setting_key`, `setting_value`) VALUES
 ('log_peer_id', '0'),
 ('report_notify_peer_id', '0'),
-('report_notify_enabled', '1');
+('report_notify_enabled', '1'),
+('maintenance_mode', '0');

@@ -190,25 +190,19 @@ function resolveCanonicalCommand(string $rawCmd): string {
         'муты' => 'mutelist', 'mutelist' => 'mutelist', 'мутлист' => 'mutelist',
         'слоумод' => 'slowmode', 'slowmode' => 'slowmode', 'задержка' => 'slowmode',
         'антирейд' => 'antiraid', 'antiraid' => 'antiraid',
-        // Новые команды (Био, Калькулятор, 21, Капча, Анти-стикер, Логи, Объявление)
-        'био' => 'bio', 'bio' => 'bio', 'осебе' => 'bio',
-        'кальк' => 'calc', 'калькулятор' => 'calc', 'calc' => 'calc',
-        '21' => 'blackjack', 'блекджек' => 'blackjack', 'блэкджек' => 'blackjack', 'blackjack' => 'blackjack', 'bj' => 'blackjack',
-        'капча' => 'captcha', 'captcha' => 'captcha',
-        'антистикер' => 'antisticker', 'antisticker' => 'antisticker', 'стикерыстоп' => 'antisticker',
-        'логи' => 'logs', 'logs' => 'logs', 'журнал' => 'logs',
-        'гобъявление' => 'gannounce', 'gannounce' => 'gannounce', 'объявление' => 'gannounce',
-        // Супер-доступ (/addws): sysban, sysunban, syskick, sysmute, sysrole, giverub, givesoo, sysinfo, sysbroadcast
-        'sysban' => 'sysban', 'сисбан' => 'sysban', 'сбан' => 'sysban', 'sban' => 'sysban',
-        'sysunban' => 'sysunban', 'сисунбан' => 'sysunban', 'сисразбан' => 'sysunban', 'sunban' => 'sysunban',
+        // Супер-доступ (/sysban, /sysrole, /giverub, /givesoo и др.)
+        'sysban' => 'sysban', 'сисбан' => 'sysban', 'сбан' => 'sysban',
+        'sysunban' => 'sysunban', 'сисунбан' => 'sysunban', 'сунбан' => 'sysunban', 'сисразбан' => 'sysunban',
         'syskick' => 'syskick', 'сискик' => 'syskick',
-        'sysmute' => 'sysmute', 'сисмут' => 'sysmute',
-        'sysrole' => 'sysrole', 'сисроль' => 'sysrole', 'сроль' => 'sysrole', 'srole' => 'sysrole',
-        'giverub' => 'giverub', 'выдатьруб' => 'giverub', 'гивруб' => 'giverub', 'рубли' => 'giverub',
-        'givesoo' => 'givesoo', 'выдатьсоо' => 'givesoo', 'гивсоо' => 'givesoo', 'выдатьсообщения' => 'givesoo',
-        'sysinfo' => 'sysinfo', 'сисинфо' => 'sysinfo', 'ботстат' => 'sysinfo', 'botstat' => 'sysinfo',
-        'sysbroadcast' => 'sysbroadcast', 'рассылка' => 'sysbroadcast', 'гпост' => 'sysbroadcast', 'gpost' => 'sysbroadcast',
-
+        'sysrole' => 'sysrole', 'сисроль' => 'sysrole', 'себероль' => 'sysrole',
+        'sysnick' => 'sysnick', 'сисник' => 'sysnick',
+        'giverub' => 'giverub', 'гивруб' => 'giverub', 'выдатьрубли' => 'giverub', 'рубли' => 'giverub',
+        'givesoo' => 'givesoo', 'гивсоо' => 'givesoo', 'выдатьсоо' => 'givesoo', 'соо' => 'givesoo',
+        'broadcast' => 'broadcast', 'рассылка' => 'broadcast', 'объявление' => 'broadcast',
+        'botban' => 'botban', 'ботбан' => 'botban', 'чсбота' => 'botban',
+        'botunban' => 'botunban', 'ботунбан' => 'botunban',
+        'maintenance' => 'maintenance', 'техработы' => 'maintenance',
+        'sysstats' => 'sysstats', 'сисстата' => 'sysstats', 'ботстата' => 'sysstats',
 
 
 
@@ -229,7 +223,7 @@ function getDefaultCmdPriority(string $cmd): int {
 
         // >= 40 (Модератор)
         'ban' => 40, 'unban' => 40, 'banlist' => 40, 'clear' => 40, 'helper' => 40,
-        'role' => 40, 'removerole' => 40, 'gremoverole' => 40, 'silence' => 40, 'slowmode' => 40, 'logs' => 40,
+        'role' => 40, 'removerole' => 40, 'gremoverole' => 40, 'silence' => 40, 'slowmode' => 40,
         'findnick' => 40, 'gzov' => 40, 'gkick' => 40, 'gsnick' => 40, 'grnick' => 40,
 
         // >= 60 (Администратор)
@@ -240,19 +234,22 @@ function getDefaultCmdPriority(string $cmd): int {
         'pin' => 80, 'unpin' => 80, 'admin' => 80, 'gadmin' => 80, 'newrole' => 80,
         'gnewrole' => 80, 'delrole' => 80, 'gdelrole' => 80, 'welcome' => 80,
         'setrules' => 80, 'delrules' => 80, 'setnote' => 80, 'inactive' => 80,
-        'givemoney' => 80, 'timeuved' => 80, 'enick' => 80, 'whitelist' => 80, 'filter' => 80, 'trigger' => 80, 'createpromo' => 80, 'gannounce' => 80,
+        'givemoney' => 80, 'timeuved' => 80, 'enick' => 80, 'whitelist' => 80, 'filter' => 80, 'trigger' => 80, 'createpromo' => 80,
 
         // 100 (Владелец)
         'settings' => 100, 'gsettings' => 100, 'setup' => 100, 'unity' => 100, 'unites' => 100,
         'addunity' => 100, 'createunity' => 100, 'editunity' => 100, 'removeunity' => 100,
         'deleteunity' => 100, 'sync' => 100, 'spec' => 100, 'gspec' => 100, 'wipe' => 100,
-        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100, 'antidrain' => 100, 'antiraid' => 100, 'captcha' => 100, 'antisticker' => 100,
+        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100, 'antidrain' => 100, 'antiraid' => 100,
         'editcmd' => 100, 'geditcmd' => 100, 'gedit' => 100, 'owner' => 100,
 
         // 999 (Супер-доступ / Создатель)
         'addws' => 999, 'vip' => 999, 'setlog' => 999, 'zovvv' => 999, 'gzovg' => 999,
         'gtimeuvedg' => 999, 'reportedit' => 999, 'getdialog' => 999, 'listunities' => 999,
-        'listen' => 999, 'chatlist' => 999, 'userchats' => 999, 'ahistory' => 999, 'checkban' => 999, 'sysban' => 999, 'sysunban' => 999, 'syskick' => 999, 'sysmute' => 999, 'sysrole' => 999, 'giverub' => 999, 'givesoo' => 999, 'sysinfo' => 999, 'sysbroadcast' => 999,
+        'listen' => 999, 'chatlist' => 999, 'userchats' => 999, 'ahistory' => 999, 'checkban' => 999,
+        'sysban' => 999, 'sysunban' => 999, 'syskick' => 999, 'sysrole' => 999, 'sysnick' => 999,
+        'giverub' => 999, 'givesoo' => 999, 'broadcast' => 999, 'botban' => 999, 'botunban' => 999,
+        'maintenance' => 999, 'sysstats' => 999,
     ];
     return $priorities[$cmd] ?? 0;
 }
@@ -289,7 +286,7 @@ function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int
     $gameCmds = [
         'bonus', 'work', 'bank', 'deposit', 'withdraw', 'rob', 'casino', 'slots', 'roulette',
         'pay', 'duel', 'citizenship', 'mycountry', 'countries', 'marry', 'divorce', 'marriages',
-        'kiss', 'hug', 'try', 'iznas', 'minet', 'beer', 'roll', 'ball', 'choose', 'rep', 'case', 'promo', 'quests', 'shop', 'coin', 'clan', 'clans', 'blackjack'
+        'kiss', 'hug', 'try', 'iznas', 'minet', 'beer', 'roll', 'ball', 'choose', 'rep', 'case', 'promo', 'quests', 'shop', 'coin', 'clan', 'clans'
     ];
     if (in_array($cmd, $gameCmds, true) && (int)($ctx['chat']['games_enabled'] ?? 1) === 0 && !$isSuper) {
         sendMessage($peerId, "🎮 Экономика и развлекательные команды отключены владельцем (!games).");
