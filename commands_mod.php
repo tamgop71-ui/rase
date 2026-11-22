@@ -73,6 +73,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, ?, 'mute', ?, 1, ?)")
                 ->execute([$peerId, $targetId, $fromId, mb_substr($reason, 0, 250), $expires]);
             $tM = formatUserMention($pdo, $peerId, $targetId);
+            invalidateMemberCache($peerId, $targetId);
             sendMessage($peerId, "🔇 {$tM} заглушен(а) на {$minutes} мин. Причина: {$reason}.");
             sendToLogChat($pdo, "Беседа {$peerId}: " . formatUserMention($pdo, $peerId, $fromId) . " выдал мут {$tM} ({$minutes} мин). Причина: {$reason}");
             return true;
@@ -81,6 +82,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !унмут [ID/упоминание]"); return true; }
             $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type = 'mute'")->execute([$peerId, $targetId]);
+            invalidateMemberCache($peerId, $targetId);
             sendMessage($peerId, "🔊 С пользователя " . formatUserMention($pdo, $peerId, $targetId) . " снят мут.");
             return true;
 
@@ -240,7 +242,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             ensureUserAndMember($pdo, $peerId, $targetId);
             $cleanNick = mb_substr($newNick, 0, 48);
             $pdo->prepare("UPDATE bot_chat_members SET nickname = ? WHERE peer_id = ? AND vk_id = ?")->execute([$cleanNick, $peerId, $targetId]);
-            unset($GLOBALS['_mention_cache']["{$peerId}:{$targetId}"]);
+            invalidateMemberCache($peerId, $targetId);
             sendMessage($peerId, "✅ Установлен никнейм: " . formatUserMention($pdo, $peerId, $targetId));
             return true;
 
@@ -248,7 +250,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !рник [ID/упоминание]"); return true; }
             $pdo->prepare("UPDATE bot_chat_members SET nickname = NULL WHERE peer_id = ? AND vk_id = ?")->execute([$peerId, $targetId]);
-            unset($GLOBALS['_mention_cache']["{$peerId}:{$targetId}"]);
+            invalidateMemberCache($peerId, $targetId);
             sendMessage($peerId, "🗑 Никнейм пользователя " . formatUserMention($pdo, $peerId, $targetId) . " удалён.");
             return true;
 
@@ -426,6 +428,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
 
             ensureUserAndMember($pdo, $peerId, $targetId);
             $pdo->prepare("UPDATE bot_chat_members SET role_priority = ? WHERE peer_id = ? AND vk_id = ?")->execute([$newPriority, $peerId, $targetId]);
+            invalidateMemberCache($peerId, $targetId);
             $rName = getRoleName($pdo, $peerId, $newPriority);
             $uM = formatUserMention($pdo, $peerId, $targetId);
             sendMessage($peerId, "✅ Пользователю {$uM} выдана роль «{$rName}» ({$newPriority}).");
@@ -441,6 +444,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $peers = ($cmd === 'gremoverole') ? getUnityPeers($pdo, $peerId) : [$peerId];
             foreach ($peers as $pId) {
                 $pdo->prepare("UPDATE bot_chat_members SET role_priority = 0 WHERE peer_id = ? AND vk_id = ?")->execute([$pId, $targetId]);
+                invalidateMemberCache($pId, $targetId);
             }
             $uM = formatUserMention($pdo, $peerId, $targetId);
             sendMessage($peerId, "✅ С пользователя {$uM} сняты все роли" . ($cmd === 'gremoverole' ? " во всём объединении (" . count($peers) . " бесед)." : " в беседе."));
@@ -451,6 +455,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $rawT = mb_strtolower(trim($args));
             if (in_array($rawT, ['выкл', 'off', '0', 'стоп', 'stop'], true)) {
                 $pdo->prepare("UPDATE bot_chats SET silence_until = NULL WHERE peer_id = ?")->execute([$peerId]);
+            invalidateChatCache($peerId);
                 sendMessage($peerId, "🔊 Режим тишины отключён.");
                 return true;
             }
@@ -458,9 +463,11 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 $cur = $ctx['chat']['silence_until'] ?? null;
                 if ($cur && strtotime($cur) > time()) {
                     $pdo->prepare("UPDATE bot_chats SET silence_until = NULL WHERE peer_id = ?")->execute([$peerId]);
+            invalidateChatCache($peerId);
                     sendMessage($peerId, "🔊 Режим тишины отключён.");
                 } else {
                     $pdo->prepare("UPDATE bot_chats SET silence_until = '2036-12-31 23:59:59' WHERE peer_id = ?")->execute([$peerId]);
+            invalidateChatCache($peerId);
                     sendMessage($peerId, "🔇 Режим тишины включён бессрочно. Писать смогут только участники с ролью.");
                 }
                 return true;
@@ -474,6 +481,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             }
             $until = date('Y-m-d H:i:s', time() + $sec);
             $pdo->prepare("UPDATE bot_chats SET silence_until = ? WHERE peer_id = ?")->execute([$until, $peerId]);
+            invalidateChatCache($peerId);
             sendMessage($peerId, "🔇 Режим тишины включён до " . date('d.m.Y H:i', time() + $sec) . " МСК.");
             return true;
 
@@ -523,6 +531,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             foreach ($peers as $pId) {
                 ensureUserAndMember($pdo, $pId, $targetId);
                 $pdo->prepare("UPDATE bot_chat_members SET nickname = ? WHERE peer_id = ? AND vk_id = ?")->execute([$cleanNick, $pId, $targetId]);
+                invalidateMemberCache($pId, $targetId);
             }
             sendMessage($peerId, "✅ Никнейм «{$cleanNick}» установлен во всех беседах объединения (" . count($peers) . " шт.).");
             return true;
@@ -533,6 +542,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $peers = getUnityPeers($pdo, $peerId);
             foreach ($peers as $pId) {
                 $pdo->prepare("UPDATE bot_chat_members SET nickname = NULL WHERE peer_id = ? AND vk_id = ?")->execute([$pId, $targetId]);
+                invalidateMemberCache($pId, $targetId);
             }
             sendMessage($peerId, "🗑 Никнейм удалён во всех беседах объединения (" . count($peers) . " шт.).");
             return true;
@@ -595,6 +605,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             foreach ($peers as $pId) {
                 ensureUserAndMember($pdo, $pId, $targetId);
                 $pdo->prepare("UPDATE bot_chat_members SET role_priority = ? WHERE peer_id = ? AND vk_id = ?")->execute([$newPriority, $pId, $targetId]);
+                invalidateMemberCache($pId, $targetId);
             }
             $rName = getRoleName($pdo, $peerId, $newPriority);
             sendMessage($peerId, "✅ Пользователю " . formatUserMention($pdo, $peerId, $targetId) . " выдана роль «{$rName}» ({$newPriority}) во всём объединении (" . count($peers) . " шт.).");
@@ -622,9 +633,11 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                     return true;
                 }
                 $pdo->prepare("UPDATE bot_chat_members SET gm_granted_by = NULL, gm_min_priority = 0 WHERE peer_id = ? AND vk_id = ?")->execute([$peerId, $targetId]);
+            invalidateMemberCache($peerId, $targetId);
                 sendMessage($peerId, "🛡 С {$uT} снят иммунитет.");
             } else {
                 $pdo->prepare("UPDATE bot_chat_members SET gm_granted_by = ?, gm_min_priority = ? WHERE peer_id = ? AND vk_id = ?")->execute([$fromId, $myPriority, $peerId, $targetId]);
+                invalidateMemberCache($peerId, $targetId);
                 $roleReq = getRoleName($pdo, $peerId, $myPriority);
                 sendMessage($peerId, "🛡 {$uT} получил(а) иммунитет. Необходимая роль для взаимодействия: {$roleReq} ({$myPriority}) и выше.");
             }
@@ -639,6 +652,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 return true;
             }
             $pdo->prepare("UPDATE bot_chat_members SET gm_granted_by = NULL, gm_min_priority = 0 WHERE peer_id = ? AND vk_id = ?")->execute([$peerId, $targetId]);
+            invalidateMemberCache($peerId, $targetId);
             sendMessage($peerId, "✅ Иммунитет с " . formatUserMention($pdo, $peerId, $targetId) . " снят.");
             return true;
 
@@ -702,6 +716,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             if ($wText === '') { sendMessage($peerId, "⚠️ Использование: !welcome [текст приветствия] (или !welcome off)"); return true; }
             $val = (mb_strtolower($wText) === 'off') ? null : $wText;
             $pdo->prepare("UPDATE bot_chats SET welcome_text = ? WHERE peer_id = ?")->execute([$val, $peerId]);
+            invalidateChatCache($peerId);
             sendMessage($peerId, $val ? "👋 Приветствие установлено!" : "🗑 Приветствие отключено.");
             return true;
 
@@ -709,11 +724,13 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $rText = trim($args);
             if ($rText === '') { sendMessage($peerId, "⚠️ Использование: !setrules [текст правил]"); return true; }
             $pdo->prepare("UPDATE bot_chats SET rules_text = ? WHERE peer_id = ?")->execute([$rText, $peerId]);
+            invalidateChatCache($peerId);
             sendMessage($peerId, "📜 Правила беседы обновлены!");
             return true;
 
         case 'delrules':
             $pdo->prepare("UPDATE bot_chats SET rules_text = NULL WHERE peer_id = ?")->execute([$peerId]);
+            invalidateChatCache($peerId);
             sendMessage($peerId, "🗑 Правила беседы сброшены.");
             return true;
 
@@ -848,13 +865,16 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $sub = mb_strtolower(trim($args));
             $peers = $isUnity ? getUnityPeers($pdo, $peerId) : [$peerId];
 
-            if (in_array($sub, ['games', 'silence', 'mentions', 'automod', 'antiflood', 'antidrain', 'antiraid'], true)) {
+            if (in_array($sub, ['games', 'silence', 'mentions', 'automod', 'antiflood', 'antidrain', 'antiraid', 'captcha', 'antisticker'], true)) {
                 foreach ($peers as $pId) {
                     if ($sub === 'games') $pdo->prepare("UPDATE bot_chats SET games_enabled = 1 - games_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'automod') $pdo->prepare("UPDATE bot_chats SET automod_enabled = 1 - automod_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'antiflood') $pdo->prepare("UPDATE bot_chats SET antiflood_enabled = 1 - antiflood_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'antidrain') $pdo->prepare("UPDATE bot_chats SET antidrain_enabled = 1 - antidrain_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'antiraid') $pdo->prepare("UPDATE bot_chats SET antiraid_enabled = 1 - antiraid_enabled WHERE peer_id = ?")->execute([$pId]);
+                    elseif ($sub === 'captcha') $pdo->prepare("UPDATE bot_chats SET captcha_enabled = 1 - captcha_enabled WHERE peer_id = ?")->execute([$pId]);
+                    elseif ($sub === 'antisticker') $pdo->prepare("UPDATE bot_chats SET antisticker_enabled = 1 - antisticker_enabled WHERE peer_id = ?")->execute([$pId]);
+                    invalidateChatCache($pId);
                     elseif ($sub === 'mentions') $pdo->prepare("UPDATE bot_chats SET mentions_enabled = 1 - mentions_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'silence') {
                         $stmtS = $pdo->prepare("SELECT silence_until FROM bot_chats WHERE peer_id = ?");
@@ -873,6 +893,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $fS = (int)$c['antiflood_enabled'] ? '✅' : '❌';
             $dS = (int)($c['antidrain_enabled'] ?? 0) ? '✅' : '❌';
             $rS = (int)($c['antiraid_enabled'] ?? 0) ? '✅' : '❌';
+            $cS = (int)($c['captcha_enabled'] ?? 0) ? '✅' : '❌';
+            $stS = (int)($c['antisticker_enabled'] ?? 0) ? '✅' : '❌';
             $mS = (int)$c['mentions_enabled'] ? '✅' : '❌';
             $sS = (!empty($c['silence_until']) && strtotime($c['silence_until']) > time()) ? '✅' : '❌';
             $pCmd = $isUnity ? '!gsettings' : '!settings';
@@ -890,6 +912,10 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                     ['label' => "🚨 Анти-рейд {$rS}", 'payload' => ['cmd' => "{$pCmd} antiraid"], 'color' => 'negative']
                 ],
                 [
+                    ['label' => "🧩 Капча {$cS}", 'payload' => ['cmd' => "{$pCmd} captcha"], 'color' => 'primary'],
+                    ['label' => "🚫 Стикеры {$stS}", 'payload' => ['cmd' => "{$pCmd} antisticker"], 'color' => 'secondary']
+                ],
+                [
                     ['label' => "🔔 Упоминания {$mS}", 'payload' => ['cmd' => "{$pCmd} mentions"], 'color' => 'secondary']
                 ]
             ]);
@@ -899,18 +925,21 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
 
         case 'games':
             $pdo->prepare("UPDATE bot_chats SET games_enabled = 1 - games_enabled WHERE peer_id = ?")->execute([$peerId]);
+            invalidateChatCache($peerId);
             $stS = $pdo->prepare("SELECT games_enabled FROM bot_chats WHERE peer_id = ?"); $stS->execute([$peerId]); $st = (int)$stS->fetchColumn();
             sendMessage($peerId, $st ? "🎮 Игры и экономика включены!" : "🎮 Игры и экономика отключены.");
             return true;
 
         case 'automod':
             $pdo->prepare("UPDATE bot_chats SET automod_enabled = 1 - automod_enabled WHERE peer_id = ?")->execute([$peerId]);
+            invalidateChatCache($peerId);
             $stS = $pdo->prepare("SELECT automod_enabled FROM bot_chats WHERE peer_id = ?"); $stS->execute([$peerId]); $st = (int)$stS->fetchColumn();
             sendMessage($peerId, $st ? "🤖 Автомодерация рекламы включена!" : "🤖 Автомодерация отключена.");
             return true;
 
         case 'antiflood':
             $pdo->prepare("UPDATE bot_chats SET antiflood_enabled = 1 - antiflood_enabled WHERE peer_id = ?")->execute([$peerId]);
+            invalidateChatCache($peerId);
             $stS = $pdo->prepare("SELECT antiflood_enabled FROM bot_chats WHERE peer_id = ?"); $stS->execute([$peerId]); $st = (int)$stS->fetchColumn();
             sendMessage($peerId, $st ? "🌊 Антифлуд включён (автомут на 5 мин за спам)!" : "🌊 Антифлуд отключён.");
             return true;
@@ -1178,6 +1207,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $tCtx = ensureUserAndMember($pdo, $peerId, $targetId);
             $newS = (int)$tCtx['global']['is_superadmin'] ? 0 : 1;
             $pdo->prepare("UPDATE bot_users SET is_superadmin = ? WHERE vk_id = ?")->execute([$newS, $targetId]);
+            invalidateMemberCache($peerId, $targetId);
             sendMessage($peerId, $newS ? "⚡ Выдан супер-доступ (/addws) пользователю " . formatUserMention($pdo, $peerId, $targetId) : "⚡ Супер-доступ отозван.");
             return true;
 
@@ -1271,6 +1301,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             }
             $tp = (int)$arg; if ($tp > 0 && $tp < 2000000000) $tp += 2000000000;
             $pdo->prepare("UPDATE bot_chats SET listen_target_vk_id = ?, listen_until = DATE_ADD(NOW(), INTERVAL 24 HOUR) WHERE peer_id = ?")->execute([$fromId, $tp]);
+            invalidateChatCache($tp);
             sendMessage($peerId, "🎧 Прослушка чата {$tp} включена на 24 часа.");
             return true;
 
@@ -1433,6 +1464,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
 
         case 'antidrain':
             $pdo->prepare("UPDATE bot_chats SET antidrain_enabled = 1 - antidrain_enabled WHERE peer_id = ?")->execute([$peerId]);
+            invalidateChatCache($peerId);
             $stS = $pdo->prepare("SELECT antidrain_enabled FROM bot_chats WHERE peer_id = ?"); $stS->execute([$peerId]); $st = (int)$stS->fetchColumn();
             sendMessage($peerId, $st
                 ? "🛡 Анти-слив включён! Если любой админ (<100) сделает 4+ кика/бана/снятия ролей за 2 минуты — бот снимет его роль и кикнет."
@@ -1513,6 +1545,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             }
             $val = max(0, min(300, (int)$sec));
             $pdo->prepare("UPDATE bot_chats SET slowmode_sec = ? WHERE peer_id = ?")->execute([$val, $peerId]);
+            invalidateChatCache($peerId);
             sendMessage($peerId, $val > 0
                 ? "🐢 Медленный режим включён! Участники без роли могут писать 1 сообщение раз в {$val} сек."
                 : "🚀 Медленный режим отключён.");
@@ -1520,12 +1553,70 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
 
         case 'antiraid':
             $pdo->prepare("UPDATE bot_chats SET antiraid_enabled = 1 - antiraid_enabled WHERE peer_id = ?")->execute([$peerId]);
+            invalidateChatCache($peerId);
             $stR = $pdo->prepare("SELECT antiraid_enabled FROM bot_chats WHERE peer_id = ?");
             $stR->execute([$peerId]);
             $st = (int)$stR->fetchColumn();
             sendMessage($peerId, $st
                 ? "🚨 Анти-рейд включён! Все новые входящие участники будут автоматически исключаться до отключения режима."
                 : "✅ Анти-рейд отключён. Вход в беседу снова открыт.");
+            return true;
+
+
+        case 'captcha':
+            $pdo->prepare("UPDATE bot_chats SET captcha_enabled = 1 - captcha_enabled WHERE peer_id = ?")->execute([$peerId]);
+            invalidateChatCache($peerId);
+            $stC = $pdo->prepare("SELECT captcha_enabled FROM bot_chats WHERE peer_id = ?");
+            $stC->execute([$peerId]);
+            $st = (int)$stC->fetchColumn();
+            sendMessage($peerId, $st
+                ? "🧩 Авто-капча включена! Новые участники должны нажать кнопку «Я не бот» за 60 секунд, иначе будут исключены."
+                : "🧩 Авто-капча отключена.");
+            return true;
+
+        case 'antisticker':
+            $pdo->prepare("UPDATE bot_chats SET antisticker_enabled = 1 - antisticker_enabled WHERE peer_id = ?")->execute([$peerId]);
+            invalidateChatCache($peerId);
+            $stA = $pdo->prepare("SELECT antisticker_enabled FROM bot_chats WHERE peer_id = ?");
+            $stA->execute([$peerId]);
+            $st = (int)$stA->fetchColumn();
+            sendMessage($peerId, $st
+                ? "🚫 Режим «Анти-стикер» включён! Стикеры от участников без роли будут автоматически удаляться."
+                : "✅ Режим «Анти-стикер» отключён.");
+            return true;
+
+        case 'logs':
+            $limit = ctype_digit(trim($args)) ? max(1, min(25, (int)trim($args))) : 10;
+            $stmt = $pdo->prepare("SELECT * FROM bot_punishments WHERE peer_id = ? ORDER BY id DESC LIMIT ?");
+            $stmt->execute([$peerId, $limit]);
+            $rows = $stmt->fetchAll();
+            if (empty($rows)) { sendMessage($peerId, "📋 Журнал действий модерации в этой беседе пока пуст."); return true; }
+            $ids = array_merge(array_column($rows, 'actor_vk_id'), array_column($rows, 'target_vk_id'));
+            preloadUsers($pdo, $peerId, $ids);
+            $lines = ["📋 Последние {$limit} действий модерации:"];
+            foreach ($rows as $r) {
+                $dt = date('d.m H:i', strtotime($r['created_at']));
+                $act = ((int)$r['actor_vk_id'] > 0) ? formatUserMention($pdo, $peerId, (int)$r['actor_vk_id']) : 'Система';
+                $tgt = formatUserMention($pdo, $peerId, (int)$r['target_vk_id']);
+                $lines[] = "• [{$dt}] {$act} → " . strtoupper($r['type']) . " {$tgt} ({$r['reason']})";
+            }
+            sendMessage($peerId, implode("\n", $lines), null, ['disable_mentions' => 1]);
+            return true;
+
+        case 'gannounce':
+            $msgTxt = trim($args);
+            if ($msgTxt === '') {
+                sendMessage($peerId, "📢 Использование: !гобъявление [текст] — отправит объявление во все беседы объединения без массового пинга.");
+                return true;
+            }
+            $peers = getUnityPeers($pdo, $peerId);
+            $caller = formatUserMention($pdo, $peerId, $fromId);
+            foreach ($peers as $pId) {
+                sendMessage($pId, "📢 ОБЪЯВЛЕНИЕ АДМИНИСТРАЦИИ\n━━━━━━━━━━━━━━━━━━\n{$msgTxt}\n\n✍️ Отправил: {$caller}", null, ['disable_mentions' => 1]);
+            }
+            if (count($peers) > 1) {
+                sendMessage($peerId, "✅ Объявление разослано в " . count($peers) . " бесед объединения.");
+            }
             return true;
 
     }

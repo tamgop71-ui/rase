@@ -31,7 +31,7 @@ if ($data['type'] === 'confirmation') {
     exit(VK_CONFIRMATION_TOKEN);
 }
 
-// 2. Обработка входящего сообщения / события с глобальной защитой от HTTP 500
+// 2. Обработка входящего сообщения / события
 if ($data['type'] === 'message_new') {
     try {
         $msg    = $data['object']['message'] ?? [];
@@ -42,6 +42,35 @@ if ($data['type'] === 'message_new') {
 
         if ($fromId <= 0 || $peerId <= 0) {
             exit('ok');
+        }
+
+        // 2.0. Сверхбыстрый Fast-Path (0 SQL-запросов!) для !пинг / !статус / !test
+        if (empty($msg['action']) && $text !== '' && preg_match('/^[!\/\.\+\-](?:пинг|ping|статус|status|тест|test)$/iu', $text)) {
+            queueStatIncrement($peerId, $fromId, mb_strlen($text), 0);
+            $evDelay = max(0, time() - (int)($msg['date'] ?? time()));
+            $procMs = max(1, (int)round((microtime(true) - $GLOBALS['_req_start']) * 1000));
+            $tApi = microtime(true);
+            $res = sendMessage($peerId, "⚙️ Понг! Задержка события: {$evDelay} с | Обработка: {$procMs} мс | API: ...");
+            $apiMs = number_format((microtime(true) - $tApi) * 1000, 2, '.', '');
+            $sentCmid = (int)($res['response']['cmid'] ?? $res['response']['conversation_message_id'] ?? 0);
+            if ($sentCmid > 0) {
+                editMessage($peerId, $sentCmid, "⚙️ Понг! Задержка события: {$evDelay} с | Обработка: {$procMs} мс | API: {$apiMs} мс");
+            }
+            exit('ok');
+        }
+
+        // 2.0b. Мгновенная проверка нажатия кнопки капчи «✅ Я не бот» (0 SQL-запросов!)
+        if (!empty($msg['payload'])) {
+            $payloadData = json_decode((string)$msg['payload'], true);
+            if (!empty($payloadData['captcha_uid']) && (int)$payloadData['captcha_uid'] === $fromId) {
+                if (removeCaptchaPending($peerId, $fromId)) {
+                    sendMessage($peerId, "✅ Проверка пройдена! Добро пожаловать в беседу, [id{$fromId}|участник].");
+                }
+                exit('ok');
+            }
+            if (!empty($payloadData['cmd']) && is_string($payloadData['cmd'])) {
+                $text = $payloadData['cmd'];
+            }
         }
 
         $pdo = getDB();
@@ -82,12 +111,15 @@ if ($data['type'] === 'message_new') {
                     if (!empty($item['is_owner'])) {
                         $pdo->prepare("UPDATE bot_chats SET owner_vk_id = ? WHERE peer_id = ?")->execute([$mid, $peerId]);
                         $pdo->prepare("INSERT INTO bot_chat_members (peer_id, vk_id, role_priority) VALUES (?, ?, 100) ON DUPLICATE KEY UPDATE role_priority = 100")->execute([$peerId, $mid]);
+                        invalidateMemberCache($peerId, $mid);
                         $ownerAssigned = true;
                     } elseif (!empty($item['is_admin'])) {
                         $pdo->prepare("INSERT INTO bot_chat_members (peer_id, vk_id, role_priority) VALUES (?, ?, 60) ON DUPLICATE KEY UPDATE role_priority = GREATEST(role_priority, 60)")->execute([$peerId, $mid]);
+                        invalidateMemberCache($peerId, $mid);
                         $adminsCount++;
                     }
                 }
+                invalidateChatCache($peerId);
 
                 $kb = makeInlineKeyboard([[
                     ['label' => '📋 Помощь (!помощь)', 'payload' => ['cmd' => '!помощь'], 'color' => 'primary'],
@@ -100,11 +132,11 @@ if ($data['type'] === 'message_new') {
                 exit('ok');
             }
 
-            // Вошёл новый участник -> проверка анти-рейда, бана и приветствие
+            // Вошёл новый участник -> анти-рейд, проверка бана, капча и приветствие
             if (($actType === 'chat_invite_user' || $actType === 'chat_invite_user_by_link') && $actMemberId > 0) {
                 $ctxJoin = ensureUserAndMember($pdo, $peerId, $actMemberId);
 
-                // Анти-рейд режим (!антирейд)
+                // Анти-рейд (!антирейд)
                 if ((int)($ctxJoin['chat']['antiraid_enabled'] ?? 0) === 1 && $peerId > 2000000000 && !hasSuperAccess($pdo, $actMemberId)) {
                     vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $actMemberId]);
                     sendMessage($peerId, "🚨 [АНТИ-РЕЙД] Вход в беседу временно закрыт. Пользователь " . formatUserMention($pdo, $peerId, $actMemberId) . " исключён.", null, ['disable_mentions' => 1]);
@@ -122,6 +154,16 @@ if ($data['type'] === 'message_new') {
                     exit('ok');
                 }
 
+                // Авто-капча при входе (!капча)
+                if ((int)($ctxJoin['chat']['captcha_enabled'] ?? 0) === 1 && $peerId > 2000000000 && !hasSuperAccess($pdo, $actMemberId)) {
+                    addCaptchaPending($peerId, $actMemberId, 60);
+                    $kbCap = makeInlineKeyboard([[
+                        ['label' => '✅ Я не бот', 'payload' => ['captcha_uid' => $actMemberId], 'color' => 'positive']
+                    ]]);
+                    sendMessage($peerId, "🧩 " . formatUserMention($pdo, $peerId, $actMemberId) . ", нажмите кнопку «✅ Я не бот» в течение 60 секунд, иначе вы будете исключены.", $kbCap);
+                    exit('ok');
+                }
+
                 $welcome = trim((string)($ctxJoin['chat']['welcome_text'] ?? ''));
                 if ($welcome !== '') {
                     sendMessage($peerId, "👋 " . formatUserMention($pdo, $peerId, $actMemberId) . ", " . $welcome);
@@ -130,66 +172,98 @@ if ($data['type'] === 'message_new') {
             exit('ok');
         }
 
-        // 2.2. Быстрый контекст (1 SELECT + 1 multi-table UPDATE)
-        $ctx = ensureUserAndMember($pdo, $peerId, $fromId, $text, $hasSticker);
-        $isSuper = ((int)$ctx['global']['is_superadmin'] === 1);
-        $myPriority = $isSuper ? 100 : (int)$ctx['member']['role_priority'];
-
         // Сохраняем cmid в локальный /tmp буфер для !clear (0 SQL-запросов!)
         if ($peerId > 2000000000 && $cmid > 0) {
             recordRecentMessage($peerId, $cmid, $fromId);
         }
 
+        // Проверяем, является ли сообщение командой
+        $isCommand = ($text !== '' && preg_match('/^[!\/\.\+\-]([\wа-яё]+)(?:\s+(.*))?$/isu', $text, $cmdMatches));
+
+        // 2.2. Если это НЕ команда — идём по сверхбыстрому пути из /tmp-кэша (0 SQL-запросов!)
+        if (!$isCommand) {
+            $fast = getFastModContext($pdo, $peerId, $fromId);
+            $chat = $fast['chat'];
+            $member = $fast['member'];
+            $isSuper = ((int)($member['is_superadmin'] ?? 0) === 1);
+            $myPriority = $isSuper ? 100 : (int)($member['role_priority'] ?? 0);
+
+            if ($fast['cached']) {
+                queueStatIncrement($peerId, $fromId, mb_strlen($text), $hasSticker ? 1 : 0);
+            }
+        } else {
+            // Для команд загружаем актуальный полный профиль (1 SELECT, статистика уходит в очередь)
+            $ctx = ensureUserAndMember($pdo, $peerId, $fromId, $text, $hasSticker);
+            $chat = $ctx['chat'];
+            $member = $ctx['member'];
+            $isSuper = ((int)$ctx['global']['is_superadmin'] === 1);
+            $myPriority = $isSuper ? 100 : (int)$member['role_priority'];
+        }
+
         // 2.3. Автоснятие AFK при написании сообщения
-        if (!empty($ctx['global']['afk_reason']) && !preg_match('/^[!\/\.\+\-](?:афк|afk)/iu', $text)) {
+        if (!empty($member['afk_reason']) && !preg_match('/^[!\/\.\+\-](?:афк|afk)/iu', $text)) {
             $pdo->prepare("UPDATE bot_users SET afk_reason = NULL, afk_since = NULL WHERE vk_id = ?")->execute([$fromId]);
             setAfkCache($fromId, null);
+            invalidateMemberCache($peerId, $fromId);
             sendMessage($peerId, "👋 С возвращением, " . formatUserMention($pdo, $peerId, $fromId) . "! Режим AFK снят.", null, ['disable_mentions' => 1]);
         }
 
         // 2.4. Прослушка (!listen)
-        if (!empty($ctx['chat']['listen_target_vk_id']) && !empty($ctx['chat']['listen_until'])) {
-            if (strtotime($ctx['chat']['listen_until']) > time()) {
-                $listenerId = (int)$ctx['chat']['listen_target_vk_id'];
+        if (!empty($chat['listen_target_vk_id']) && !empty($chat['listen_until'])) {
+            if (strtotime($chat['listen_until']) > time()) {
+                $listenerId = (int)$chat['listen_target_vk_id'];
                 if ($listenerId > 0 && $listenerId !== $fromId && $text !== '') {
                     sendMessage($listenerId, "🎧 [Чат {$peerId}] " . formatUserMention($pdo, $peerId, $fromId) . ": {$text}");
                 }
             }
         }
 
-        // 2.5. Модерация в реальном времени (Тишина, Мут, Слоумод, Антифлуд, Фильтр, Автомод + Whitelist)
+        // 2.5. Модерация в реальном времени (Капча, Тишина, Мут, Слоумод, Антистикер, Антифлуд, Фильтр, Автомод + Whitelist)
         if ($peerId > 2000000000 && !$isSuper) {
-            $silUntil = $ctx['chat']['silence_until'] ?? null;
+            // Если пользователь не прошёл капчу — удаляем его сообщения
+            if (isCaptchaPending($peerId, $fromId)) {
+                if ($cmid > 0) deleteMessage($peerId, [$cmid]);
+                exit('ok');
+            }
+
+            $silUntil = $chat['silence_until'] ?? null;
             if ($silUntil && strtotime($silUntil) > time() && $myPriority <= 0) {
                 if ($cmid > 0) deleteMessage($peerId, [$cmid]);
                 exit('ok');
             }
 
-            if (!empty($ctx['member']['is_muted'])) {
+            if (!empty($member['is_muted'])) {
                 if ($cmid > 0) deleteMessage($peerId, [$cmid]);
                 exit('ok');
             }
 
-            // Медленный режим (!слоумод) — 0 SQL-запросов
-            $slowSec = (int)($ctx['chat']['slowmode_sec'] ?? 0);
+            // Анти-стикер (!антистикер)
+            if ($hasSticker && (int)($chat['antisticker_enabled'] ?? 0) === 1 && $myPriority <= 0) {
+                if ($cmid > 0) deleteMessage($peerId, [$cmid]);
+                exit('ok');
+            }
+
+            // Медленный режим (!слоумод)
+            $slowSec = (int)($chat['slowmode_sec'] ?? 0);
             if ($slowSec > 0 && $myPriority <= 0 && checkSlowmode($peerId, $fromId, $slowSec)) {
                 if ($cmid > 0) deleteMessage($peerId, [$cmid]);
                 exit('ok');
             }
 
-            // Антифлуд — 0 SQL-запросов
-            if ((int)($ctx['chat']['antiflood_enabled'] ?? 0) === 1 && $myPriority <= 0) {
+            // Антифлуд
+            if ((int)($chat['antiflood_enabled'] ?? 0) === 1 && $myPriority <= 0) {
                 if (checkAntiFlood($peerId, $fromId)) {
                     $expires = date('Y-m-d H:i:s', time() + 300);
                     $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, 0, 'mute', 'Антифлуд (автомут)', 1, ?)")
                         ->execute([$peerId, $fromId, $expires]);
+                    invalidateMemberCache($peerId, $fromId);
                     if ($cmid > 0) deleteMessage($peerId, [$cmid]);
                     sendMessage($peerId, "🌊 " . formatUserMention($pdo, $peerId, $fromId) . " получил(а) автомут на 5 мин. за флуд!");
                     exit('ok');
                 }
             }
 
-            // Фильтр запрещённых слов (!фильтр) из /tmp кэша
+            // Фильтр запрещённых слов (!фильтр)
             if ($myPriority <= 0 && $text !== '') {
                 $badWords = getChatFilters($pdo, $peerId);
                 if (!empty($badWords)) {
@@ -204,8 +278,8 @@ if ($data['type'] === 'message_new') {
                 }
             }
 
-            // Умный Автомод ссылок с Белым списком (!whitelist)
-            if ((int)($ctx['chat']['automod_enabled'] ?? 0) === 1 && $myPriority <= 0 && $text !== '') {
+            // Автомод ссылок с Белым списком (!whitelist)
+            if ((int)($chat['automod_enabled'] ?? 0) === 1 && $myPriority <= 0 && $text !== '') {
                 $blocked = findBlockedLink($pdo, $peerId, $text);
                 if ($blocked !== null) {
                     if ($cmid > 0) deleteMessage($peerId, [$cmid]);
@@ -215,21 +289,13 @@ if ($data['type'] === 'message_new') {
             }
         }
 
-        // 2.6. Обработка нажатий на inline-кнопки (payload)
-        if (!empty($msg['payload'])) {
-            $payload = json_decode((string)$msg['payload'], true);
-            if (!empty($payload['cmd']) && is_string($payload['cmd'])) {
-                $text = $payload['cmd'];
-            }
-        }
-
-        // 2.7. Разбор команд с префиксами: ! / . + -
-        if ($text !== '' && preg_match('/^[!\/\.\+\-]([\wа-яё]+)(?:\s+(.*))?$/isu', $text, $matches)) {
-            executeCommand($pdo, mb_strtolower($matches[1]), trim($matches[2] ?? ''), $peerId, $fromId, $ctx, $msg);
+        // 2.6. Выполнение команды
+        if ($isCommand) {
+            executeCommand($pdo, mb_strtolower($cmdMatches[1]), trim($cmdMatches[2] ?? ''), $peerId, $fromId, $ctx, $msg);
             exit('ok');
         }
 
-        // 2.8. Уведомление об AFK (читается из /tmp без SQL-запросов!)
+        // 2.7. Уведомление об AFK (из /tmp, 0 SQL-запросов)
         if ($peerId > 2000000000) {
             $mentionedIds = [];
             if (!empty($msg['reply_message']['from_id']) && (int)$msg['reply_message']['from_id'] > 0) {
@@ -250,7 +316,7 @@ if ($data['type'] === 'message_new') {
             }
         }
 
-        // 2.9. Кастомные триггеры / автоответчик (!триггер) из /tmp кэша
+        // 2.8. Кастомные триггеры / автоответчик (!триггер)
         if ($text !== '') {
             $triggers = getChatTriggers($pdo, $peerId);
             if (!empty($triggers)) {

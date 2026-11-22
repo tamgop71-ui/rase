@@ -92,7 +92,16 @@ function cacheDel(string $key): void {
 }
 
 /**
- * Быстрый вызов VK API (HTTP/2 + Keep-Alive + IPv4)
+ * Отложенная запись статистики сообщений в /tmp-очередь (0.05 мс вместо 40 мс SQL UPDATE).
+ * Фоновый worker.php сбрасывает очередь в MySQL пачкой раз в 5 секунд.
+ */
+function queueStatIncrement(int $peerId, int $vkId, int $charLen, int $stickerInc): void {
+    $line = json_encode(['p' => $peerId, 'u' => $vkId, 'c' => $charLen, 's' => $stickerInc, 'd' => date('Y-m-d')]) . "\n";
+    @file_put_contents('/tmp/bot_stat_queue.jsonl', $line, FILE_APPEND | LOCK_EX);
+}
+
+/**
+ * Быстрый вызов VK API (HTTP/2 + Keep-Alive + IPv4) с замером времени последнего ответа
  */
 function vkApi(string $method, array $params = []): array {
     static $ch = null;
@@ -117,7 +126,10 @@ function vkApi(string $method, array $params = []): array {
     curl_setopt($ch, CURLOPT_URL, 'https://api.vk.com/method/' . $method);
     curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params));
 
+    $t0 = microtime(true);
     $res = curl_exec($ch);
+    $GLOBALS['_last_vk_api_ms'] = round((microtime(true) - $t0) * 1000, 2);
+
     if ($res === false) {
         file_put_contents('php://stderr', "[CURL ERROR] {$method}: " . curl_error($ch) . PHP_EOL);
         curl_close($ch);
@@ -146,6 +158,19 @@ function sendMessage(int $peerId, string $message, ?array $keyboard = null, arra
         $params['keyboard'] = json_encode($keyboard, JSON_UNESCAPED_UNICODE);
     }
     return vkApi('messages.send', $params);
+}
+
+function editMessage(int $peerId, int $cmid, string $message, ?array $keyboard = null): array {
+    $params = [
+        'peer_id'                 => $peerId,
+        'conversation_message_id' => $cmid,
+        'message'                 => $message,
+        'keep_forward_messages'   => 1
+    ];
+    if ($keyboard !== null) {
+        $params['keyboard'] = json_encode($keyboard, JSON_UNESCAPED_UNICODE);
+    }
+    return vkApi('messages.edit', $params);
 }
 
 function deleteMessage(int $peerId, array $cmids): void {
@@ -187,7 +212,13 @@ function hasSuperAccess(PDO $pdo, int $vkId): bool {
     if (in_array($vkId, $owners, true)) {
         return $superCache[$vkId] = true;
     }
+    $cached = cacheGet("super_{$vkId}", 120);
+    if ($cached !== null) {
+        return $superCache[$vkId] = (bool)$cached;
+    }
     $stmt = $pdo->prepare("SELECT is_superadmin FROM bot_users WHERE vk_id = ?");
     $stmt->execute([$vkId]);
-    return $superCache[$vkId] = ((int)$stmt->fetchColumn() === 1);
+    $val = ((int)$stmt->fetchColumn() === 1);
+    cacheSet("super_{$vkId}", $val ? 1 : 0);
+    return $superCache[$vkId] = $val;
 }
