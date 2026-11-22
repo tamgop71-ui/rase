@@ -9,7 +9,8 @@ define('VK_GROUP_TOKEN', trim((string)(getenv('VK_GROUP_TOKEN') ?: '')));
 define('VK_CONFIRMATION_TOKEN', trim((string)(getenv('VK_CONFIRMATION_TOKEN') ?: '')));
 define('VK_SECRET_KEY', trim((string)(getenv('VK_SECRET_KEY') ?: '')));
 define('VK_API_VERSION', '5.199');
-define('OWNER_VK_ID', trim((string)(getenv('OWNER_VK_ID') ?: '0')));
+define('MAIN_OWNER_VK_ID', (int)(getenv('MAIN_OWNER_VK_ID') ?: 831772755));
+define('OWNER_VK_ID', trim((string)(getenv('OWNER_VK_ID') ?: '831772755')));
 
 // Принудительный TCP, если указан localhost
 $rawHost = trim((string)(getenv('DB_HOST') ?: '127.0.0.1'));
@@ -101,8 +102,10 @@ function vkApi(string $method, array $params = []): array {
         curl_setopt_array($ch, [
             CURLOPT_POST           => true,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CONNECTTIMEOUT => 3,
-            CURLOPT_TIMEOUT        => 6,
+            CURLOPT_CONNECTTIMEOUT => 2,
+            CURLOPT_TIMEOUT        => 5,
+            CURLOPT_TCP_NODELAY    => 1,
+            CURLOPT_DNS_CACHE_TIMEOUT => 3600,
             CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4,
             CURLOPT_TCP_KEEPALIVE  => 1,
             CURLOPT_FORBID_REUSE   => false,
@@ -158,8 +161,10 @@ function vkApiMulti(array $calls, int $concurrency = 10): array {
                 CURLOPT_POST           => true,
                 CURLOPT_POSTFIELDS     => http_build_query($params),
                 CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_CONNECTTIMEOUT => 3,
-                CURLOPT_TIMEOUT        => 6,
+                CURLOPT_CONNECTTIMEOUT => 2,
+                CURLOPT_TIMEOUT        => 5,
+                CURLOPT_TCP_NODELAY    => 1,
+                CURLOPT_DNS_CACHE_TIMEOUT => 3600,
                 CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4,
                 CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_2_0,
                 CURLOPT_ENCODING       => '',
@@ -232,15 +237,33 @@ function makeInlineKeyboard(array $rows): array {
     return ['inline' => true, 'buttons' => $buttons];
 }
 
+function isMainOwner(int $vkId): bool {
+    return $vkId > 0 && $vkId === MAIN_OWNER_VK_ID;
+}
+
+function clearSuperAccessCache(int $vkId): void {
+    cacheDel("super_{$vkId}");
+}
+
 function hasSuperAccess(PDO $pdo, int $vkId): bool {
     static $superCache = [];
+    if ($vkId <= 0) return false;
     if (isset($superCache[$vkId])) return $superCache[$vkId];
 
+    if ($vkId === MAIN_OWNER_VK_ID) {
+        return $superCache[$vkId] = true;
+    }
     $owners = array_filter(array_map('intval', explode(',', OWNER_VK_ID)));
     if (in_array($vkId, $owners, true)) {
         return $superCache[$vkId] = true;
     }
+    $cached = cacheGet("super_{$vkId}", 60);
+    if ($cached !== null) {
+        return $superCache[$vkId] = ((int)$cached === 1);
+    }
     $stmt = $pdo->prepare("SELECT is_superadmin FROM bot_users WHERE vk_id = ?");
     $stmt->execute([$vkId]);
-    return $superCache[$vkId] = ((int)$stmt->fetchColumn() === 1);
+    $res = ((int)$stmt->fetchColumn() === 1);
+    cacheSet("super_{$vkId}", $res ? 1 : 0);
+    return $superCache[$vkId] = $res;
 }

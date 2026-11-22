@@ -61,7 +61,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "• !поцелуй / !обнять / !попытка / !пиво / !iznas / !minet";
             } elseif ($cat === 'mod20') {
                 $txt = "🛡 Команды Помощника (приоритет ≥ 20):\n\n"
-                     . "• !стата (ID) / !чатинфо / !reg [ID] / !актив [дни] (KPI)\n"
+                     . "• !стата (ID) / !досье (!whois) [ID] / !чатинфо / !reg / !актив [дни]\n"
                      . "• !мут [ID] [мин] (причина) / !унмут [ID]\n"
                      . "• !кик [ID] (причина) — исключить из чата\n"
                      . "• !пред (!варн) [ID] (причина) / !унварн [ID]\n"
@@ -97,11 +97,11 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 $txt = "👑 Владелец беседы (100) и Супер-доступ (/addws):\n\n"
                      . "• !setup / !settings / !gsettings / !gedit\n"
                      . "• !антислив (!antidrain) | !антирейд (!antiraid) — защита чата\n"
-                     . "• !automod / !антифлуд / !games / !уведы\n"
+                     . "• !automod / !антифлуд / !антикапс / !games / !уведы\n"
                      . "• !unity / !unites / !createunity / !addunity / !editunity / !removeunity / !deleteunity\n"
                      . "• !sync / !spec / !gspec / !wipe / !migration\n"
                      . "• !editcmd / !geditcmd / !owner [ID] / !никэмодзи\n"
-                     . "• Супер-доступ: /sysban, /sysunban, /syskick, /sysrole, /sysnick, /giverub, /givesoo, /broadcast, /botban, /botunban, /sysstats, /maintenance, !addws, !vip, !setlog, !zovvv, !gzovg, !gtimeuvedg, !listunities, !listen, !chatlist, !userchats, !ahistory, !checkban";
+                     . "• Супер-доступ: /sysban, /sysunban, /syskick, /sysrole, /sysnick, /giverub, /givesoo, /broadcast, /botban, /botunban, /sysstats, /syslist, /maintenance, !addws, !vip, !setlog, !zovvv, !gzovg, !gtimeuvedg, !listunities, !listen, !chatlist, !userchats, !ahistory, !checkban";
             } else {
                 $txt = "📋 Справка по командам RASE RUSSIA BOT:\n"
                      . "Префиксы: ! / . + - (на русском и английском)\n\n"

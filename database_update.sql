@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS `bot_chats` (
     `antiflood_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `antidrain_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `antiraid_enabled` TINYINT(1) NOT NULL DEFAULT 0,
+    `anticaps_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `slowmode_sec` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
     `mentions_enabled` TINYINT(1) NOT NULL DEFAULT 1,
     `listen_target_vk_id` BIGINT UNSIGNED DEFAULT NULL,
@@ -75,6 +76,7 @@ CREATE TABLE IF NOT EXISTS `bot_chat_members` (
     `gm_granted_by` BIGINT UNSIGNED DEFAULT NULL,
     `gm_min_priority` INT NOT NULL DEFAULT 0,
     `mention_opt_in` TINYINT(1) NOT NULL DEFAULT 1,
+    `invited_by` BIGINT UNSIGNED DEFAULT NULL,
     `messages_count` INT UNSIGNED NOT NULL DEFAULT 0,
     `chars_count` BIGINT UNSIGNED NOT NULL DEFAULT 0,
     `stickers_count` INT UNSIGNED NOT NULL DEFAULT 0,
@@ -283,6 +285,22 @@ CREATE TABLE IF NOT EXISTS `bot_poll_votes` (
     PRIMARY KEY (`poll_id`, `vk_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+
+-- 21. Запросы на действия против супер-доступа (подтверждение Создателем в ЛС)
+CREATE TABLE IF NOT EXISTS `bot_super_requests` (
+    `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `peer_id` BIGINT UNSIGNED NOT NULL,
+    `actor_vk_id` BIGINT UNSIGNED NOT NULL,
+    `target_vk_id` BIGINT UNSIGNED NOT NULL,
+    `action_type` VARCHAR(24) NOT NULL,
+    `duration` INT UNSIGNED NOT NULL DEFAULT 0,
+    `reason` VARCHAR(255) NOT NULL DEFAULT 'не указана',
+    `status` ENUM('pending','approved','denied') NOT NULL DEFAULT 'pending',
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Безопасное добавление новых колонок без потери существующих данных
 DROP PROCEDURE IF EXISTS `bot_safe_migrate`;
 DELIMITER $$
@@ -347,6 +365,12 @@ BEGIN
         ALTER TABLE `bot_chats` ADD COLUMN `slowmode_sec` SMALLINT UNSIGNED NOT NULL DEFAULT 0 AFTER `antiraid_enabled`;
     END IF;
 
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='anticaps_enabled') THEN
+        ALTER TABLE `bot_chats` ADD COLUMN `anticaps_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `antiraid_enabled`;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chat_members' AND COLUMN_NAME='invited_by') THEN
+        ALTER TABLE `bot_chat_members` ADD COLUMN `invited_by` BIGINT UNSIGNED DEFAULT NULL AFTER `mention_opt_in`;
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chat_members' AND COLUMN_NAME='emoji') THEN
         ALTER TABLE `bot_chat_members` ADD COLUMN `emoji` VARCHAR(16) DEFAULT NULL AFTER `nickname`;
     END IF;

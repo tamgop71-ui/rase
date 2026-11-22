@@ -100,26 +100,69 @@ if ($data['type'] === 'message_new') {
                 exit('ok');
             }
 
-            // Вошёл новый участник -> проверка анти-рейда, бана и приветствие
+            // Вошёл новый участник -> проверка анти-рейда, системного бана, локального бана и приветствие
             if (($actType === 'chat_invite_user' || $actType === 'chat_invite_user_by_link') && $actMemberId > 0) {
                 $ctxJoin = ensureUserAndMember($pdo, $peerId, $actMemberId);
+                $isInvitedByOther = ($actType === 'chat_invite_user' && $fromId > 0 && $fromId !== $actMemberId);
+                $inviterIsSuper = $isInvitedByOther && hasSuperAccess($pdo, $fromId);
+                $inviterPriority = 0;
 
-                // Анти-рейд режим (!антирейд)
-                if ((int)($ctxJoin['chat']['antiraid_enabled'] ?? 0) === 1 && $peerId > 2000000000 && !hasSuperAccess($pdo, $actMemberId)) {
+                if ($isInvitedByOther) {
+                    $stInv = $pdo->prepare("SELECT role_priority FROM bot_chat_members WHERE peer_id = ? AND vk_id = ?");
+                    $stInv->execute([$peerId, $fromId]);
+                    $inviterPriority = (int)$stInv->fetchColumn();
+                    $pdo->prepare("UPDATE bot_chat_members SET invited_by = ? WHERE peer_id = ? AND vk_id = ? AND invited_by IS NULL")
+                        ->execute([$fromId, $peerId, $actMemberId]);
+                }
+
+                // 1) Анти-рейд режим (!антирейд) — пропускает только если пригласил админ 40+ или супер-доступ
+                if ((int)($ctxJoin['chat']['antiraid_enabled'] ?? 0) === 1 && $peerId > 2000000000 && !hasSuperAccess($pdo, $actMemberId) && !$inviterIsSuper && $inviterPriority < 40) {
                     vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $actMemberId]);
-                    sendMessage($peerId, "🚨 [АНТИ-РЕЙД] Вход в беседу временно закрыт. Пользователь " . formatUserMention($pdo, $peerId, $actMemberId) . " исключён.", null, ['disable_mentions' => 1]);
+                    sendMessage($peerId, "🚨 [АНТИ-РЕЙД] Вход в беседу временно закрыт.\n👤 Пользователь " . formatUserMention($pdo, $peerId, $actMemberId) . " исключён.", null, ['disable_mentions' => 1]);
                     exit('ok');
                 }
 
-                // Проверка активного бана / гбана
-                $stmtBan = $pdo->prepare("SELECT reason FROM bot_punishments WHERE (peer_id = ? OR peer_id = 0) AND target_vk_id = ? AND type IN ('ban','gban') AND is_active = 1 AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1");
-                $stmtBan->execute([$peerId, $actMemberId]);
-                $banReason = $stmtBan->fetchColumn();
+                // 2) Проверка СИСТЕМНОГО БАНА (/sysban, peer_id = 0) — снять может ТОЛЬКО супер-доступ!
+                $stmtSysBan = $pdo->prepare("SELECT * FROM bot_punishments WHERE peer_id = 0 AND target_vk_id = ? AND type = 'gban' AND is_active = 1 AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY id DESC LIMIT 1");
+                $stmtSysBan->execute([$actMemberId]);
+                $sysBan = $stmtSysBan->fetch();
 
-                if ($banReason !== false && $peerId > 2000000000) {
-                    sendMessage($peerId, "🚫 " . formatUserMention($pdo, $peerId, $actMemberId) . " находится в списке заблокированных (Причина: {$banReason}) и исключается из беседы.");
-                    vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $actMemberId]);
-                    exit('ok');
+                if ($sysBan && $peerId > 2000000000) {
+                    $uTarget = formatUserMention($pdo, $peerId, $actMemberId);
+                    if ($inviterIsSuper) {
+                        $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = 0 AND target_vk_id = ? AND type = 'gban'")->execute([$actMemberId]);
+                        $uInv = formatUserMention($pdo, $peerId, $fromId);
+                        sendMessage($peerId, "🔓 Системная блокировка автоматически снята!\n👤 Пользователь: {$uTarget}\n👑 Пригласил: {$uInv} (Супер-доступ)");
+                        sendToLogChat($pdo, "Беседа {$peerId}: {$uInv} (супер-доступ) пригласил {$uTarget} и автоматически снял /sysban.");
+                    } else {
+                        vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $actMemberId]);
+                        $uBanner = !empty($sysBan['actor_vk_id']) ? formatUserMention($pdo, $peerId, (int)$sysBan['actor_vk_id']) : 'Система';
+                        $term = $sysBan['expires_at'] ? ('до ' . date('d.m.Y H:i', strtotime($sysBan['expires_at'])) . ' МСК') : 'Навсегда';
+                        sendMessage($peerId, "⛔ Вход запрещён (Системная блокировка)!\n👤 Пользователь: {$uTarget}\n👮 Заблокировал: {$uBanner}\n⏳ Срок: {$term}\n📝 Причина: {$sysBan['reason']}\n🔒 Снять системный бан может только пользователь с супер-доступом.", null, ['disable_mentions' => 1]);
+                        exit('ok');
+                    }
+                }
+
+                // 3) Проверка ОБЫЧНОГО БАНА в беседе — если пригласил с ролью >= 40 (или супер-доступ), бан снимается!
+                $stmtBan = $pdo->prepare("SELECT * FROM bot_punishments WHERE peer_id = ? AND target_vk_id = ? AND type IN ('ban','gban') AND is_active = 1 AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY id DESC LIMIT 1");
+                $stmtBan->execute([$peerId, $actMemberId]);
+                $chatBan = $stmtBan->fetch();
+
+                if ($chatBan && $peerId > 2000000000) {
+                    $uTarget = formatUserMention($pdo, $peerId, $actMemberId);
+                    if ($isInvitedByOther && ($inviterPriority >= 40 || $inviterIsSuper)) {
+                        $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type IN ('ban','gban')")->execute([$peerId, $actMemberId]);
+                        $uInv = formatUserMention($pdo, $peerId, $fromId);
+                        $invRole = $inviterIsSuper ? 'Супер-доступ' : (getRoleName($pdo, $peerId, $inviterPriority) . " ({$inviterPriority})");
+                        sendMessage($peerId, "🔓 Блокировка в беседе автоматически снята!\n👤 Пользователь: {$uTarget}\n👮 Пригласил: {$uInv} ({$invRole})");
+                        sendToLogChat($pdo, "Беседа {$peerId}: {$uInv} ({$invRole}) пригласил {$uTarget} — локальный бан снят автоматически.");
+                    } else {
+                        vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $actMemberId]);
+                        $uBanner = !empty($chatBan['actor_vk_id']) ? formatUserMention($pdo, $peerId, (int)$chatBan['actor_vk_id']) : 'Система';
+                        $term = $chatBan['expires_at'] ? ('до ' . date('d.m.Y H:i', strtotime($chatBan['expires_at'])) . ' МСК') : 'Навсегда';
+                        sendMessage($peerId, "🚫 Пользователь заблокирован в беседе и исключён!\n👤 Участник: {$uTarget}\n👮 Заблокировал: {$uBanner}\n⏳ Срок: {$term}\n📝 Причина: {$chatBan['reason']}\nℹ️ Чтобы разблокировать приглашением, нужна роль от 40 и выше.", null, ['disable_mentions' => 1]);
+                        exit('ok');
+                    }
                 }
 
                 $welcome = trim((string)($ctxJoin['chat']['welcome_text'] ?? ''));
@@ -209,6 +252,13 @@ if ($data['type'] === 'message_new') {
                         }
                     }
                 }
+            }
+
+            // Анти-капс (!антикапс) — 0 SQL-запросов
+            if ((int)($ctx['chat']['anticaps_enabled'] ?? 0) === 1 && $myPriority <= 0 && $text !== '' && isExcessiveCaps($text)) {
+                if ($cmid > 0) deleteMessage($peerId, [$cmid]);
+                sendMessage($peerId, "🔡 " . formatUserMention($pdo, $peerId, $fromId) . ", пожалуйста, не пишите КАПСОМ!");
+                exit('ok');
             }
 
             // Умный Автомод ссылок с Белым списком (!whitelist)

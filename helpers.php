@@ -113,10 +113,10 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
             u.total_messages, u.total_chars, u.total_stickers,
             c.peer_id AS c_exists, c.title, c.owner_vk_id, c.unity_id, c.rules_text, c.welcome_text,
             c.games_enabled, c.silence_until, c.silence_action, c.automod_enabled, c.antiflood_enabled,
-            c.antidrain_enabled, c.antiraid_enabled, c.slowmode_sec, c.mentions_enabled,
+            c.antidrain_enabled, c.antiraid_enabled, c.anticaps_enabled, c.slowmode_sec, c.mentions_enabled,
             c.listen_target_vk_id, c.listen_until, c.total_messages AS chat_total_messages,
             m.vk_id AS m_exists, m.nickname, m.emoji, m.role_priority, m.gm_granted_by, m.gm_min_priority,
-            m.mention_opt_in, m.messages_count, m.chars_count, m.stickers_count, m.joined_at, m.last_active_at,
+            m.mention_opt_in, m.invited_by, m.messages_count, m.chars_count, m.stickers_count, m.joined_at, m.last_active_at,
             (SELECT 1 FROM bot_punishments p
              WHERE p.peer_id = q.req_peer AND p.target_vk_id = q.req_vk AND p.type = 'mute'
                AND p.is_active = 1 AND (p.expires_at IS NULL OR p.expires_at > NOW())
@@ -256,6 +256,7 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
         'antiflood_enabled'   => (int)($row['antiflood_enabled'] ?? 0),
         'antidrain_enabled'   => (int)($row['antidrain_enabled'] ?? 0),
         'antiraid_enabled'    => (int)($row['antiraid_enabled'] ?? 0),
+        'anticaps_enabled'    => (int)($row['anticaps_enabled'] ?? 0),
         'slowmode_sec'        => (int)($row['slowmode_sec'] ?? 0),
         'mentions_enabled'    => (int)($row['mentions_enabled'] ?? 1),
         'listen_target_vk_id' => $row['listen_target_vk_id'] ?? null,
@@ -272,6 +273,7 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
         'gm_granted_by'   => $row['gm_granted_by'] ?? null,
         'gm_min_priority' => (int)($row['gm_min_priority'] ?? 0),
         'mention_opt_in'  => (int)($row['mention_opt_in'] ?? 1),
+        'invited_by'      => !empty($row['invited_by']) ? (int)$row['invited_by'] : null,
         'messages_count'  => (int)($row['messages_count'] ?? 1) + ($hasActivity && !$needRefetch ? 1 : 0),
         'chars_count'     => (int)($row['chars_count'] ?? 0) + ($hasActivity && !$needRefetch ? $charLen : 0),
         'stickers_count'  => (int)($row['stickers_count'] ?? 0) + ($hasActivity && !$needRefetch ? $stickerInc : 0),
@@ -413,24 +415,225 @@ function extractTargetUser(PDO $pdo, int $peerId, array $msg, string &$args): ?i
     return null;
 }
 
-function canPunish(PDO $pdo, int $peerId, int $actorId, int $actorPriority, int $targetId, bool $isSuper): ?string {
-    if ($actorId === $targetId) return "⛔ Вы не можете применить это действие к самому себе.";
-    if ($isSuper) return null;
-    if (hasSuperAccess($pdo, $targetId)) return "⛔ Вы не можете применить наказание к пользователю с супер-доступом.";
+/**
+ * Строгая проверка иерархии ролей, иммунитета и защиты супер-доступа.
+ * Возвращает:
+ *  - null — действие разрешено;
+ *  - 'REQUIRE_SUPER_APPROVAL' — супер-доступ пытается наказать супер-доступ (нужно одобрение Создателя 831772755);
+ *  - string — текст отказа.
+ */
+function canPunish(PDO $pdo, int $peerId, int $actorId, int $actorPriority, int $targetId, bool $isSuper, bool $allowSelf = false): ?string {
+    if ($actorId === $targetId) {
+        return $allowSelf ? null : "⛔ Вы не можете применить это действие к самому себе.";
+    }
+    // Главный создатель (831772755) неприкосновенен и может наказывать кого угодно без одобрения
+    if (isMainOwner($actorId)) {
+        return null;
+    }
+    if (isMainOwner($targetId)) {
+        return "⛔ Невозможно применить наказание к Создателю бота.";
+    }
+
+    $targetIsSuper = hasSuperAccess($pdo, $targetId);
+    if ($isSuper) {
+        if ($targetIsSuper) {
+            return 'REQUIRE_SUPER_APPROVAL';
+        }
+        return null;
+    }
+
+    if ($targetIsSuper) {
+        return "⛔ Вы не можете применить это действие к пользователю с супер-доступом.";
+    }
 
     $stmt = $pdo->prepare("SELECT role_priority, gm_granted_by, gm_min_priority FROM bot_chat_members WHERE peer_id = ? AND vk_id = ?");
     $stmt->execute([$peerId, $targetId]);
     $targetMem = $stmt->fetch();
 
-    if ((int)($targetMem['role_priority'] ?? 0) >= $actorPriority) {
-        return "⛔ Вы не можете применить наказание к пользователю, роль которого выше или равна вашей.";
+    $targetPriority = (int)($targetMem['role_priority'] ?? 0);
+    if ($targetPriority >= $actorPriority) {
+        $tRole = getRoleName($pdo, $peerId, $targetPriority);
+        return "⛔ Недостаточно прав: роль пользователя «{$tRole}» ({$targetPriority}) равна или выше вашей ({$actorPriority}).";
     }
+
     $gmMin = (int)($targetMem['gm_min_priority'] ?? 0);
     if (!empty($targetMem['gm_granted_by']) && $actorPriority < $gmMin) {
         $reqRole = getRoleName($pdo, $peerId, $gmMin);
-        return "🛡 У пользователя активен иммунитет (/gm). Необходима роль не ниже: {$reqRole} ({$gmMin}).";
+        return "🛡 У пользователя активен иммунитет (/gm). Необходима роль не ниже: «{$reqRole}» ({$gmMin}).";
     }
     return null;
+}
+
+/**
+ * Создание запроса Создателю бота (831772755) в ЛС на действие супер-админа против супер-админа
+ */
+function requestSuperApproval(PDO $pdo, int $peerId, int $actorId, int $targetId, string $actionType, int $duration = 0, string $reason = 'не указана'): void {
+    $pdo->prepare("INSERT INTO bot_super_requests (peer_id, actor_vk_id, target_vk_id, action_type, duration, reason, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')")
+        ->execute([$peerId, $actorId, $targetId, $actionType, $duration, mb_substr($reason, 0, 250)]);
+    $reqId = (int)$pdo->lastInsertId();
+
+    $actionLabels = [
+        'kick'        => 'Кик из беседы',
+        'gkick'       => 'Глобальный кик (объединение)',
+        'syskick'     => 'Системный кик (все беседы)',
+        'ban'         => 'Бан в беседе',
+        'gban'        => 'Глобальный бан (объединение)',
+        'sysban'      => 'Системный бан (все беседы)',
+        'mute'        => 'Мут в беседе',
+        'warn'        => 'Предупреждение (варн)',
+        'removerole'  => 'Снятие ролей в беседе',
+        'gremoverole' => 'Снятие ролей (объединение)',
+    ];
+    $label = $actionLabels[$actionType] ?? strtoupper($actionType);
+
+    $stChat = $pdo->prepare("SELECT title FROM bot_chats WHERE peer_id = ?");
+    $stChat->execute([$peerId]);
+    $chatTitle = (string)($stChat->fetchColumn() ?: "Беседа #{$peerId}");
+
+    $uActor  = formatUserMention($pdo, $peerId, $actorId);
+    $uTarget = formatUserMention($pdo, $peerId, $targetId);
+    $durStr = '';
+    if ($duration > 0) {
+        $unit = ($actionType === 'mute') ? 'мин.' : 'дн.';
+        $durStr = "\n⏳ Срок: {$duration} {$unit}";
+    }
+
+    $dmText = "🚨 [ЗАПРОС НА НАКАЗАНИЕ СУПЕР-ДОСТУПА #{$reqId}]\n"
+            . "━━━━━━━━━━━━━━━━━━\n"
+            . "⚡ Действие: {$label}\n"
+            . "👮 Инициатор: {$uActor}\n"
+            . "🎯 Цель: {$uTarget}\n"
+            . "💬 Беседа: {$chatTitle} (ID: {$peerId}){$durStr}\n"
+            . "📝 Причина: {$reason}\n\n"
+            . "Разрешить выполнение этого действия?";
+
+    $kb = makeInlineKeyboard([[
+        ['label' => '✅ Разрешить', 'payload' => ['cmd' => "!superreq approve {$reqId}"], 'color' => 'positive'],
+        ['label' => '❌ Отклонить', 'payload' => ['cmd' => "!superreq deny {$reqId}"], 'color' => 'negative']
+    ]]);
+
+    sendMessage(MAIN_OWNER_VK_ID, $dmText, $kb);
+    sendMessage($peerId, "🛡 Пользователь {$uTarget} обладает супер-доступом.\n📩 Запрос #{$reqId} на разрешение действия («{$label}») отправлен Создателю бота в ЛС. Ожидайте решения.");
+}
+
+/**
+ * Выполнение одобренного Создателем действия против пользователя с супер-доступом
+ */
+function executeApprovedSuperAction(PDO $pdo, array $req, int $approverId): string {
+    $peerId   = (int)$req['peer_id'];
+    $actorId  = (int)$req['actor_vk_id'];
+    $targetId = (int)$req['target_vk_id'];
+    $act      = (string)$req['action_type'];
+    $dur      = (int)$req['duration'];
+    $reason   = (string)$req['reason'];
+
+    $uActor  = formatUserMention($pdo, $peerId, $actorId);
+    $uTarget = formatUserMention($pdo, $peerId, $targetId);
+    $uOwner  = formatUserMention($pdo, $peerId, $approverId);
+
+    switch ($act) {
+        case 'kick':
+            $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active) VALUES (?, ?, ?, 'kick', ?, 0)")
+                ->execute([$peerId, $targetId, $actorId, $reason]);
+            if ($peerId > 2000000000) {
+                vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $targetId]);
+            }
+            sendMessage($peerId, "👢 Пользователь исключён из беседы (одобрено Создателем)\n👤 Участник: {$uTarget}\n👮 Инициатор: {$uActor}\n👑 Одобрил: {$uOwner}\n📝 Причина: {$reason}");
+            return "Кик {$uTarget} из беседы {$peerId} выполнен.";
+
+        case 'gkick':
+            $peers = getUnityPeers($pdo, $peerId);
+            $calls = [];
+            foreach ($peers as $pId) {
+                if ($pId > 2000000000) $calls[] = ['method' => 'messages.removeChatUser', 'params' => ['chat_id' => $pId - 2000000000, 'member_id' => $targetId]];
+            }
+            vkApiMulti($calls, 10);
+            sendMessage($peerId, "👢 Глобальное исключение по объединению (одобрено Создателем)\n👤 Участник: {$uTarget}\n👮 Инициатор: {$uActor}\n👑 Одобрил: {$uOwner}\n💬 Бесед: " . count($peers));
+            return "Глобальный кик {$uTarget} выполнен.";
+
+        case 'syskick':
+            $allChats = $pdo->query("SELECT peer_id FROM bot_chats WHERE peer_id > 2000000000")->fetchAll(PDO::FETCH_COLUMN);
+            $calls = [];
+            foreach ($allChats as $cp) $calls[] = ['method' => 'messages.removeChatUser', 'params' => ['chat_id' => (int)$cp - 2000000000, 'member_id' => $targetId]];
+            vkApiMulti($calls, 10);
+            sendMessage($peerId, "👢 [SYSKICK] Системное исключение (одобрено Создателем)\n👤 Участник: {$uTarget}\n👮 Инициатор: {$uActor}\n👑 Одобрил: {$uOwner}\n📝 Причина: {$reason}");
+            return "Системный кик {$uTarget} выполнен.";
+
+        case 'ban':
+            $days = max(1, $dur ?: 365);
+            $expires = date('Y-m-d H:i:s', time() + ($days * 86400));
+            $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type = 'ban'")->execute([$peerId, $targetId]);
+            $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, ?, 'ban', ?, 1, ?)")
+                ->execute([$peerId, $targetId, $actorId, $reason, $expires]);
+            if ($peerId > 2000000000) {
+                vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $targetId]);
+            }
+            sendMessage($peerId, "🔨 Пользователь заблокирован (одобрено Создателем)\n👤 Нарушитель: {$uTarget}\n👮 Выдал: {$uActor}\n👑 Одобрил: {$uOwner}\n⏳ Срок: {$days} дн.\n📝 Причина: {$reason}");
+            return "Бан {$uTarget} на {$days} дн. выполнен.";
+
+        case 'gban':
+            $days = max(1, $dur ?: 365);
+            $expires = date('Y-m-d H:i:s', time() + ($days * 86400));
+            $peers = getUnityPeers($pdo, $peerId);
+            $calls = [];
+            foreach ($peers as $pId) {
+                $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type IN ('ban','gban')")->execute([$pId, $targetId]);
+                $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, ?, 'gban', ?, 1, ?)")
+                    ->execute([$pId, $targetId, $actorId, $reason, $expires]);
+                if ($pId > 2000000000) $calls[] = ['method' => 'messages.removeChatUser', 'params' => ['chat_id' => $pId - 2000000000, 'member_id' => $targetId]];
+            }
+            vkApiMulti($calls, 10);
+            sendMessage($peerId, "🔨 Глобальная блокировка по объединению (одобрено Создателем)\n👤 Нарушитель: {$uTarget}\n👮 Выдал: {$uActor}\n👑 Одобрил: {$uOwner}\n⏳ Срок: {$days} дн.\n📝 Причина: {$reason}");
+            return "Глобальный бан {$uTarget} выполнен.";
+
+        case 'sysban':
+            $expires = $dur > 0 ? date('Y-m-d H:i:s', time() + ($dur * 86400)) : null;
+            $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = 0 AND target_vk_id = ? AND type = 'gban'")->execute([$targetId]);
+            $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (0, ?, ?, 'gban', ?, 1, ?)")
+                ->execute([$targetId, $actorId, $reason, $expires]);
+            $allChats = $pdo->query("SELECT peer_id FROM bot_chats WHERE peer_id > 2000000000")->fetchAll(PDO::FETCH_COLUMN);
+            $calls = [];
+            foreach ($allChats as $cp) $calls[] = ['method' => 'messages.removeChatUser', 'params' => ['chat_id' => (int)$cp - 2000000000, 'member_id' => $targetId]];
+            vkApiMulti($calls, 10);
+            sendMessage($peerId, "⛔ [SYSBAN] Системная блокировка (одобрено Создателем)\n👤 Нарушитель: {$uTarget}\n👮 Выдал: {$uActor}\n👑 Одобрил: {$uOwner}\n📝 Причина: {$reason}");
+            return "Системный бан {$uTarget} выполнен.";
+
+        case 'mute':
+            $mins = max(1, $dur ?: 30);
+            $expires = date('Y-m-d H:i:s', time() + ($mins * 60));
+            $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type = 'mute'")->execute([$peerId, $targetId]);
+            $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, ?, 'mute', ?, 1, ?)")
+                ->execute([$peerId, $targetId, $actorId, $reason, $expires]);
+            sendMessage($peerId, "🔇 Пользователь заглушён (одобрено Создателем)\n👤 Нарушитель: {$uTarget}\n👮 Выдал: {$uActor}\n👑 Одобрил: {$uOwner}\n⏳ Срок: {$mins} мин.\n📝 Причина: {$reason}");
+            return "Мут {$uTarget} на {$mins} мин. выполнен.";
+
+        case 'warn':
+            $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active) VALUES (?, ?, ?, 'warn', ?, 1)")
+                ->execute([$peerId, $targetId, $actorId, $reason]);
+            sendMessage($peerId, "⚠️ Выдано предупреждение (одобрено Создателем)\n👤 Нарушитель: {$uTarget}\n👮 Выдал: {$uActor}\n👑 Одобрил: {$uOwner}\n📝 Причина: {$reason}");
+            return "Варн {$uTarget} выдан.";
+
+        case 'removerole':
+        case 'gremoverole':
+            $peers = ($act === 'gremoverole') ? getUnityPeers($pdo, $peerId) : [$peerId];
+            foreach ($peers as $pId) {
+                $pdo->prepare("UPDATE bot_chat_members SET role_priority = 0 WHERE peer_id = ? AND vk_id = ?")->execute([$pId, $targetId]);
+            }
+            sendMessage($peerId, "🛡 Все роли сняты (одобрено Создателем)\n👤 Пользователь: {$uTarget}\n👮 Снял: {$uActor}\n👑 Одобрил: {$uOwner}");
+            return "Роли с {$uTarget} сняты.";
+    }
+    return "Действие выполнено.";
+}
+
+/**
+ * Проверка сообщения на злоупотребление КАПСОМ (>75% заглавных букв при длине >= 12 букв)
+ */
+function isExcessiveCaps(string $text): bool {
+    $letters = preg_replace('/[^a-zA-Zа-яА-ЯёЁ]/u', '', $text);
+    $len = mb_strlen((string)$letters);
+    if ($len < 12) return false;
+    $upper = preg_replace('/[^A-ZА-ЯЁ]/u', '', (string)$letters);
+    return (mb_strlen((string)$upper) / $len) >= 0.75;
 }
 
 function getSystemSetting(PDO $pdo, string $key, string $default = ''): string {

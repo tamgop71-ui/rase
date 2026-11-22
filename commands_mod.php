@@ -57,72 +57,95 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
         case 'mute':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !мут [ID/упоминание] [минуты] (причина)"); return true; }
-            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
-            if ($err !== null) { sendMessage($peerId, $err); return true; }
-
-            $minutes = 30;
-            $reason = 'не указана';
+            $minutes = 30; $reason = 'не указана';
             if (preg_match('/^(\d+)(?:\s+(.*))?$/isu', trim($args), $m)) {
                 $minutes = max(1, min(43200, (int)$m[1]));
                 if (!empty($m[2])) $reason = trim($m[2]);
-            } elseif (trim($args) !== '') {
-                $reason = trim($args);
+            } elseif (trim($args) !== '') { $reason = trim($args); }
+
+            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
+            if ($err === 'REQUIRE_SUPER_APPROVAL') {
+                requestSuperApproval($pdo, $peerId, $fromId, $targetId, 'mute', $minutes, $reason);
+                return true;
             }
-            $expires = date('Y-m-d H:i:s', time() + ($minutes * 60));
+            if ($err !== null) { sendMessage($peerId, $err); return true; }
+
+            $expiresTs = time() + ($minutes * 60);
+            $expires = date('Y-m-d H:i:s', $expiresTs);
             $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type = 'mute'")->execute([$peerId, $targetId]);
             $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, ?, 'mute', ?, 1, ?)")
                 ->execute([$peerId, $targetId, $fromId, mb_substr($reason, 0, 250), $expires]);
             $tM = formatUserMention($pdo, $peerId, $targetId);
-            sendMessage($peerId, "🔇 {$tM} заглушен(а) на {$minutes} мин. Причина: {$reason}.");
-            sendToLogChat($pdo, "Беседа {$peerId}: " . formatUserMention($pdo, $peerId, $fromId) . " выдал мут {$tM} ({$minutes} мин). Причина: {$reason}");
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            $aRole = $isSuper ? 'Супер-доступ' : getRoleName($pdo, $peerId, $myPriority);
+            sendMessage($peerId, "🔇 Пользователь заглушён\n👤 Нарушитель: {$tM}\n👮 Выдал: {$aM} ({$aRole})\n⏳ Срок: {$minutes} мин. (до " . date('d.m.Y H:i', $expiresTs) . " МСК)\n📝 Причина: {$reason}");
+            sendToLogChat($pdo, "Беседа {$peerId}: {$aM} выдал мут {$tM} ({$minutes} мин). Причина: {$reason}");
             return true;
 
         case 'unmute':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !унмут [ID/упоминание]"); return true; }
             $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type = 'mute'")->execute([$peerId, $targetId]);
-            sendMessage($peerId, "🔊 С пользователя " . formatUserMention($pdo, $peerId, $targetId) . " снят мут.");
+            $tM = formatUserMention($pdo, $peerId, $targetId);
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "🔊 Мут снят\n👤 Пользователь: {$tM}\n👮 Снял: {$aM}");
             return true;
 
         case 'kick':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !кик [ID/упоминание] (причина)"); return true; }
-            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
-            if ($err !== null) { sendMessage($peerId, $err); return true; }
             $reason = trim($args) !== '' ? trim($args) : 'не указана';
+
+            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
+            if ($err === 'REQUIRE_SUPER_APPROVAL') {
+                requestSuperApproval($pdo, $peerId, $fromId, $targetId, 'kick', 0, $reason);
+                return true;
+            }
+            if ($err !== null) { sendMessage($peerId, $err); return true; }
+
             $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active) VALUES (?, ?, ?, 'kick', ?, 0)")
                 ->execute([$peerId, $targetId, $fromId, mb_substr($reason, 0, 250)]);
             if ($peerId > 2000000000) {
                 vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $targetId]);
             }
             $tM = formatUserMention($pdo, $peerId, $targetId);
-            sendMessage($peerId, "👢 {$tM} исключён(а) из беседы. Причина: {$reason}.");
-            sendToLogChat($pdo, "Беседа {$peerId}: " . formatUserMention($pdo, $peerId, $fromId) . " кикнул {$tM}. Причина: {$reason}");
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            $aRole = $isSuper ? 'Супер-доступ' : getRoleName($pdo, $peerId, $myPriority);
+            sendMessage($peerId, "👢 Пользователь исключён из беседы\n👤 Участник: {$tM}\n👮 Исключил: {$aM} ({$aRole})\n📝 Причина: {$reason}");
+            sendToLogChat($pdo, "Беседа {$peerId}: {$aM} кикнул {$tM}. Причина: {$reason}");
             checkAntiDrain($pdo, $peerId, $fromId, $myPriority, $isSuper, $ctx['chat']);
             return true;
 
         case 'warn':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !пред [ID/упоминание] (причина)"); return true; }
-            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
-            if ($err !== null) { sendMessage($peerId, $err); return true; }
             $reason = trim($args) !== '' ? trim($args) : 'не указана';
+
+            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
+            if ($err === 'REQUIRE_SUPER_APPROVAL') {
+                requestSuperApproval($pdo, $peerId, $fromId, $targetId, 'warn', 0, $reason);
+                return true;
+            }
+            if ($err !== null) { sendMessage($peerId, $err); return true; }
+
             $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active) VALUES (?, ?, ?, 'warn', ?, 1)")
                 ->execute([$peerId, $targetId, $fromId, mb_substr($reason, 0, 250)]);
             $stmtCnt = $pdo->prepare("SELECT COUNT(*) FROM bot_punishments WHERE peer_id = ? AND target_vk_id = ? AND type = 'warn' AND is_active = 1");
             $stmtCnt->execute([$peerId, $targetId]);
             $wCount = (int)$stmtCnt->fetchColumn();
             $tM = formatUserMention($pdo, $peerId, $targetId);
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            $aRole = $isSuper ? 'Супер-доступ' : getRoleName($pdo, $peerId, $myPriority);
             if ($wCount >= 3) {
                 $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type = 'warn'")->execute([$peerId, $targetId]);
-                sendMessage($peerId, "⚠️ {$tM} получил(а) предупреждение (3/3). Причина: {$reason}.\n🚫 Лимит исчерпан — исключение из беседы.");
+                sendMessage($peerId, "⚠️ Выдано предупреждение (3/3)\n👤 Нарушитель: {$tM}\n👮 Выдал: {$aM} ({$aRole})\n📝 Причина: {$reason}\n🚫 Лимит исчерпан — пользователь исключается из беседы.");
                 if ($peerId > 2000000000) {
                     vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $targetId]);
                 }
             } else {
-                sendMessage($peerId, "⚠️ {$tM} получил(а) предупреждение ({$wCount}/3). Причина: {$reason}.");
+                sendMessage($peerId, "⚠️ Выдано предупреждение ({$wCount}/3)\n👤 Нарушитель: {$tM}\n👮 Выдал: {$aM} ({$aRole})\n📝 Причина: {$reason}");
             }
-            sendToLogChat($pdo, "Беседа {$peerId}: " . formatUserMention($pdo, $peerId, $fromId) . " выдал варн ({$wCount}/3) {$tM}. Причина: {$reason}");
+            sendToLogChat($pdo, "Беседа {$peerId}: {$aM} выдал варн ({$wCount}/3) {$tM}. Причина: {$reason}");
             return true;
 
         case 'unwarn':
@@ -134,7 +157,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $tM = formatUserMention($pdo, $peerId, $targetId);
             if (!$lastId) { sendMessage($peerId, "ℹ️ У {$tM} нет активных предупреждений."); return true; }
             $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE id = ?")->execute([$lastId]);
-            sendMessage($peerId, "✅ С пользователя {$tM} снято последнее предупреждение.");
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "✅ Предупреждение снято\n👤 Пользователь: {$tM}\n👮 Снял: {$aM}");
             return true;
 
         case 'getwarns':
@@ -237,19 +261,27 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             $newNick = trim($args);
             if (!$targetId || $newNick === '') { sendMessage($peerId, "⚠️ Использование: !сник [ID/упоминание] [никнейм]"); return true; }
+            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper, true);
+            if ($err !== null && $err !== 'REQUIRE_SUPER_APPROVAL') { sendMessage($peerId, $err); return true; }
             ensureUserAndMember($pdo, $peerId, $targetId);
             $cleanNick = mb_substr($newNick, 0, 48);
             $pdo->prepare("UPDATE bot_chat_members SET nickname = ? WHERE peer_id = ? AND vk_id = ?")->execute([$cleanNick, $peerId, $targetId]);
             unset($GLOBALS['_mention_cache']["{$peerId}:{$targetId}"]);
-            sendMessage($peerId, "✅ Установлен никнейм: " . formatUserMention($pdo, $peerId, $targetId));
+            $tM = formatUserMention($pdo, $peerId, $targetId);
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "🏷 Установлен никнейм\n👤 Пользователь: {$tM}\n✏️ Никнейм: {$cleanNick}\n👮 Выдал: {$aM}");
             return true;
 
         case 'rnick':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !рник [ID/упоминание]"); return true; }
+            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper, true);
+            if ($err !== null && $err !== 'REQUIRE_SUPER_APPROVAL') { sendMessage($peerId, $err); return true; }
             $pdo->prepare("UPDATE bot_chat_members SET nickname = NULL WHERE peer_id = ? AND vk_id = ?")->execute([$peerId, $targetId]);
             unset($GLOBALS['_mention_cache']["{$peerId}:{$targetId}"]);
-            sendMessage($peerId, "🗑 Никнейм пользователя " . formatUserMention($pdo, $peerId, $targetId) . " удалён.");
+            $tM = formatUserMention($pdo, $peerId, $targetId);
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "🗑 Никнейм удалён\n👤 Пользователь: {$tM}\n👮 Удалил: {$aM}");
             return true;
 
         case 'nlist':
@@ -332,14 +364,21 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
         case 'ban':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !бан [ID/упоминание] (дни) (причина)"); return true; }
-            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
-            if ($err !== null) { sendMessage($peerId, $err); return true; }
             $days = 365; $reason = 'не указана';
             if (preg_match('/^(\d+)(?:\s+(.*))?$/isu', trim($args), $m)) {
                 $days = max(1, min(3650, (int)$m[1]));
                 if (!empty($m[2])) $reason = trim($m[2]);
             } elseif (trim($args) !== '') { $reason = trim($args); }
-            $expires = date('Y-m-d H:i:s', time() + ($days * 86400));
+
+            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
+            if ($err === 'REQUIRE_SUPER_APPROVAL') {
+                requestSuperApproval($pdo, $peerId, $fromId, $targetId, 'ban', $days, $reason);
+                return true;
+            }
+            if ($err !== null) { sendMessage($peerId, $err); return true; }
+
+            $expiresTs = time() + ($days * 86400);
+            $expires = date('Y-m-d H:i:s', $expiresTs);
             $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type = 'ban'")->execute([$peerId, $targetId]);
             $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, ?, 'ban', ?, 1, ?)")
                 ->execute([$peerId, $targetId, $fromId, mb_substr($reason, 0, 250), $expires]);
@@ -347,8 +386,10 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $targetId]);
             }
             $tM = formatUserMention($pdo, $peerId, $targetId);
-            sendMessage($peerId, "🔨 {$tM} заблокирован(а) на {$days} дн. Причина: {$reason}.");
-            sendToLogChat($pdo, "Беседа {$peerId}: " . formatUserMention($pdo, $peerId, $fromId) . " забанил {$tM} ({$days} дн). Причина: {$reason}");
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            $aRole = $isSuper ? 'Супер-доступ' : getRoleName($pdo, $peerId, $myPriority);
+            sendMessage($peerId, "🔨 Пользователь заблокирован в беседе\n👤 Нарушитель: {$tM}\n👮 Выдал: {$aM} ({$aRole})\n⏳ Срок: {$days} дн. (до " . date('d.m.Y H:i', $expiresTs) . " МСК)\n📝 Причина: {$reason}");
+            sendToLogChat($pdo, "Беседа {$peerId}: {$aM} забанил {$tM} ({$days} дн). Причина: {$reason}");
             checkAntiDrain($pdo, $peerId, $fromId, $myPriority, $isSuper, $ctx['chat']);
             return true;
 
@@ -356,7 +397,9 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !унбан [ID/упоминание]"); return true; }
             $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type IN ('ban','gban')")->execute([$peerId, $targetId]);
-            sendMessage($peerId, "✅ Блокировка с " . formatUserMention($pdo, $peerId, $targetId) . " снята.");
+            $tM = formatUserMention($pdo, $peerId, $targetId);
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "✅ Блокировка в беседе снята\n👤 Пользователь: {$tM}\n👮 Снял: {$aM}");
             return true;
 
         case 'banlist':
@@ -422,14 +465,15 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 return true;
             }
             $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
-            if ($err !== null && !$isSuper) { sendMessage($peerId, $err); return true; }
+            if ($err !== null && $err !== 'REQUIRE_SUPER_APPROVAL') { sendMessage($peerId, $err); return true; }
 
             ensureUserAndMember($pdo, $peerId, $targetId);
             $pdo->prepare("UPDATE bot_chat_members SET role_priority = ? WHERE peer_id = ? AND vk_id = ?")->execute([$newPriority, $peerId, $targetId]);
             $rName = getRoleName($pdo, $peerId, $newPriority);
             $uM = formatUserMention($pdo, $peerId, $targetId);
-            sendMessage($peerId, "✅ Пользователю {$uM} выдана роль «{$rName}» ({$newPriority}).");
-            sendToLogChat($pdo, "Беседа {$peerId}: " . formatUserMention($pdo, $peerId, $fromId) . " выдал роль «{$rName}» ({$newPriority}) -> {$uM}");
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "🛡 Назначена роль\n👤 Пользователь: {$uM}\n🎖 Роль: «{$rName}» ({$newPriority})\n👮 Выдал: {$aM}");
+            sendToLogChat($pdo, "Беседа {$peerId}: {$aM} выдал роль «{$rName}» ({$newPriority}) -> {$uM}");
             return true;
 
         case 'removerole':
@@ -437,13 +481,19 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Укажите пользователя: !removerole [ID/упоминание]"); return true; }
             $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
+            if ($err === 'REQUIRE_SUPER_APPROVAL') {
+                requestSuperApproval($pdo, $peerId, $fromId, $targetId, $cmd, 0, 'Снятие ролей');
+                return true;
+            }
             if ($err !== null) { sendMessage($peerId, $err); return true; }
             $peers = ($cmd === 'gremoverole') ? getUnityPeers($pdo, $peerId) : [$peerId];
             foreach ($peers as $pId) {
                 $pdo->prepare("UPDATE bot_chat_members SET role_priority = 0 WHERE peer_id = ? AND vk_id = ?")->execute([$pId, $targetId]);
             }
             $uM = formatUserMention($pdo, $peerId, $targetId);
-            sendMessage($peerId, "✅ С пользователя {$uM} сняты все роли" . ($cmd === 'gremoverole' ? " во всём объединении (" . count($peers) . " бесед)." : " в беседе."));
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            $scope = ($cmd === 'gremoverole') ? "во всём объединении (" . count($peers) . " бесед)" : "в беседе";
+            sendMessage($peerId, "🛡 Роли сняты ({$scope})\n👤 Пользователь: {$uM}\n👮 Снял: {$aM}");
             checkAntiDrain($pdo, $peerId, $fromId, $myPriority, $isSuper, $ctx['chat']);
             return true;
 
@@ -505,12 +555,20 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !gkick [ID/упоминание]"); return true; }
             $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
+            if ($err === 'REQUIRE_SUPER_APPROVAL') {
+                requestSuperApproval($pdo, $peerId, $fromId, $targetId, 'gkick', 0, trim($args) ?: 'не указана');
+                return true;
+            }
             if ($err !== null) { sendMessage($peerId, $err); return true; }
             $peers = getUnityPeers($pdo, $peerId);
+            $calls = [];
             foreach ($peers as $pId) {
-                if ($pId > 2000000000) vkApi('messages.removeChatUser', ['chat_id' => $pId - 2000000000, 'member_id' => $targetId]);
+                if ($pId > 2000000000) $calls[] = ['method' => 'messages.removeChatUser', 'params' => ['chat_id' => $pId - 2000000000, 'member_id' => $targetId]];
             }
-            sendMessage($peerId, "👢 " . formatUserMention($pdo, $peerId, $targetId) . " исключён(а) из всех бесед объединения (" . count($peers) . " шт.).");
+            vkApiMulti($calls, 10);
+            $tM = formatUserMention($pdo, $peerId, $targetId);
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "👢 Глобальное исключение по объединению\n👤 Участник: {$tM}\n👮 Исключил: {$aM}\n💬 Затронуто бесед: " . count($peers));
             checkAntiDrain($pdo, $peerId, $fromId, $myPriority, $isSuper, $ctx['chat']);
             return true;
 
@@ -518,23 +576,33 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             $newNick = trim($args);
             if (!$targetId || $newNick === '') { sendMessage($peerId, "⚠️ Использование: !gsnick [ID/упоминание] [ник]"); return true; }
+            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper, true);
+            if ($err !== null && $err !== 'REQUIRE_SUPER_APPROVAL') { sendMessage($peerId, $err); return true; }
             $cleanNick = mb_substr($newNick, 0, 48);
             $peers = getUnityPeers($pdo, $peerId);
             foreach ($peers as $pId) {
                 ensureUserAndMember($pdo, $pId, $targetId);
                 $pdo->prepare("UPDATE bot_chat_members SET nickname = ? WHERE peer_id = ? AND vk_id = ?")->execute([$cleanNick, $pId, $targetId]);
             }
-            sendMessage($peerId, "✅ Никнейм «{$cleanNick}» установлен во всех беседах объединения (" . count($peers) . " шт.).");
+            unset($GLOBALS['_mention_cache']["{$peerId}:{$targetId}"]);
+            $tM = formatUserMention($pdo, $peerId, $targetId);
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "🏷 Никнейм установлен в объединении (" . count($peers) . " бесед)\n👤 Пользователь: {$tM}\n✏️ Никнейм: {$cleanNick}\n👮 Выдал: {$aM}");
             return true;
 
         case 'grnick':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !грник [ID/упоминание]"); return true; }
+            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper, true);
+            if ($err !== null && $err !== 'REQUIRE_SUPER_APPROVAL') { sendMessage($peerId, $err); return true; }
             $peers = getUnityPeers($pdo, $peerId);
             foreach ($peers as $pId) {
                 $pdo->prepare("UPDATE bot_chat_members SET nickname = NULL WHERE peer_id = ? AND vk_id = ?")->execute([$pId, $targetId]);
             }
-            sendMessage($peerId, "🗑 Никнейм удалён во всех беседах объединения (" . count($peers) . " шт.).");
+            unset($GLOBALS['_mention_cache']["{$peerId}:{$targetId}"]);
+            $tM = formatUserMention($pdo, $peerId, $targetId);
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "🗑 Никнейм удалён в объединении (" . count($peers) . " бесед)\n👤 Пользователь: {$tM}\n👮 Удалил: {$aM}");
             return true;
 
         // ==========================================
@@ -543,24 +611,35 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
         case 'gban':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !gban [ID/упоминание] (дни) (причина)"); return true; }
-            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
-            if ($err !== null) { sendMessage($peerId, $err); return true; }
             $days = 365; $reason = 'не указана';
             if (preg_match('/^(\d+)(?:\s+(.*))?$/isu', trim($args), $m)) {
                 $days = max(1, min(3650, (int)$m[1]));
                 if (!empty($m[2])) $reason = trim($m[2]);
             } elseif (trim($args) !== '') { $reason = trim($args); }
-            $expires = date('Y-m-d H:i:s', time() + ($days * 86400));
+
+            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
+            if ($err === 'REQUIRE_SUPER_APPROVAL') {
+                requestSuperApproval($pdo, $peerId, $fromId, $targetId, 'gban', $days, $reason);
+                return true;
+            }
+            if ($err !== null) { sendMessage($peerId, $err); return true; }
+
+            $expiresTs = time() + ($days * 86400);
+            $expires = date('Y-m-d H:i:s', $expiresTs);
             $peers = getUnityPeers($pdo, $peerId);
+            $calls = [];
             foreach ($peers as $pId) {
                 $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type IN ('ban','gban')")->execute([$pId, $targetId]);
                 $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, ?, 'gban', ?, 1, ?)")
                     ->execute([$pId, $targetId, $fromId, mb_substr($reason, 0, 250), $expires]);
-                if ($pId > 2000000000) vkApi('messages.removeChatUser', ['chat_id' => $pId - 2000000000, 'member_id' => $targetId]);
+                if ($pId > 2000000000) $calls[] = ['method' => 'messages.removeChatUser', 'params' => ['chat_id' => $pId - 2000000000, 'member_id' => $targetId]];
             }
+            vkApiMulti($calls, 10);
             $uM = formatUserMention($pdo, $peerId, $targetId);
-            sendMessage($peerId, "🔨 {$uM} заблокирован(а) во всех беседах объединения (" . count($peers) . " шт.) на {$days} дн. Причина: {$reason}.");
-            sendToLogChat($pdo, "GBAN: " . formatUserMention($pdo, $peerId, $fromId) . " -> {$uM} ({$days} дн). Причина: {$reason}");
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            $aRole = $isSuper ? 'Супер-доступ' : getRoleName($pdo, $peerId, $myPriority);
+            sendMessage($peerId, "🔨 Глобальная блокировка по объединению\n👤 Нарушитель: {$uM}\n👮 Выдал: {$aM} ({$aRole})\n⏳ Срок: {$days} дн. (до " . date('d.m.Y H:i', $expiresTs) . " МСК)\n💬 Бесед: " . count($peers) . "\n📝 Причина: {$reason}");
+            sendToLogChat($pdo, "GBAN: {$aM} -> {$uM} ({$days} дн). Причина: {$reason}");
             checkAntiDrain($pdo, $peerId, $fromId, $myPriority, $isSuper, $ctx['chat']);
             return true;
 
@@ -571,7 +650,9 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             foreach ($peers as $pId) {
                 $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type IN ('ban','gban')")->execute([$pId, $targetId]);
             }
-            sendMessage($peerId, "✅ С пользователя " . formatUserMention($pdo, $peerId, $targetId) . " снята блокировка во всём объединении.");
+            $uM = formatUserMention($pdo, $peerId, $targetId);
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "✅ Блокировка в объединении снята\n👤 Пользователь: {$uM}\n👮 Снял: {$aM}\n💬 Бесед: " . count($peers));
             return true;
 
         case 'grole':
@@ -591,13 +672,18 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 sendMessage($peerId, "⛔ Вы не можете выдать роль равную или выше вашей ({$myPriority}).");
                 return true;
             }
+            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
+            if ($err !== null && $err !== 'REQUIRE_SUPER_APPROVAL') { sendMessage($peerId, $err); return true; }
+
             $peers = getUnityPeers($pdo, $peerId);
             foreach ($peers as $pId) {
                 ensureUserAndMember($pdo, $pId, $targetId);
                 $pdo->prepare("UPDATE bot_chat_members SET role_priority = ? WHERE peer_id = ? AND vk_id = ?")->execute([$newPriority, $pId, $targetId]);
             }
             $rName = getRoleName($pdo, $peerId, $newPriority);
-            sendMessage($peerId, "✅ Пользователю " . formatUserMention($pdo, $peerId, $targetId) . " выдана роль «{$rName}» ({$newPriority}) во всём объединении (" . count($peers) . " шт.).");
+            $uM = formatUserMention($pdo, $peerId, $targetId);
+            $aM = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "🛡 Назначена роль в объединении (" . count($peers) . " бесед)\n👤 Пользователь: {$uM}\n🎖 Роль: «{$rName}» ({$newPriority})\n👮 Выдал: {$aM}");
             return true;
 
         case 'delmsg':
@@ -616,17 +702,18 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !gm [ID/упоминание]"); return true; }
             $tCtx = ensureUserAndMember($pdo, $peerId, $targetId);
             $uT = formatUserMention($pdo, $peerId, $targetId);
+            $uA = formatUserMention($pdo, $peerId, $fromId);
             if (!empty($tCtx['member']['gm_granted_by'])) {
                 if (!$isSuper && $myPriority < (int)$tCtx['member']['gm_min_priority']) {
                     sendMessage($peerId, "⛔ Ваша роль слишком низкая для снятия этого иммунитета.");
                     return true;
                 }
                 $pdo->prepare("UPDATE bot_chat_members SET gm_granted_by = NULL, gm_min_priority = 0 WHERE peer_id = ? AND vk_id = ?")->execute([$peerId, $targetId]);
-                sendMessage($peerId, "🛡 С {$uT} снят иммунитет.");
+                sendMessage($peerId, "🛡 Иммунитет снят\n👤 Пользователь: {$uT}\n👮 Снял: {$uA}");
             } else {
                 $pdo->prepare("UPDATE bot_chat_members SET gm_granted_by = ?, gm_min_priority = ? WHERE peer_id = ? AND vk_id = ?")->execute([$fromId, $myPriority, $peerId, $targetId]);
                 $roleReq = getRoleName($pdo, $peerId, $myPriority);
-                sendMessage($peerId, "🛡 {$uT} получил(а) иммунитет. Необходимая роль для взаимодействия: {$roleReq} ({$myPriority}) и выше.");
+                sendMessage($peerId, "🛡 Выдан иммунитет от наказаний\n👤 Пользователь: {$uT}\n👮 Выдал: {$uA}\n🔒 Необходимая роль для взаимодействия: «{$roleReq}» ({$myPriority}) и выше.");
             }
             return true;
 
@@ -639,7 +726,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 return true;
             }
             $pdo->prepare("UPDATE bot_chat_members SET gm_granted_by = NULL, gm_min_priority = 0 WHERE peer_id = ? AND vk_id = ?")->execute([$peerId, $targetId]);
-            sendMessage($peerId, "✅ Иммунитет с " . formatUserMention($pdo, $peerId, $targetId) . " снят.");
+            sendMessage($peerId, "🛡 Иммунитет снят\n👤 Пользователь: " . formatUserMention($pdo, $peerId, $targetId) . "\n👮 Снял: " . formatUserMention($pdo, $peerId, $fromId));
             return true;
 
         case 'gms':
@@ -848,13 +935,14 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $sub = mb_strtolower(trim($args));
             $peers = $isUnity ? getUnityPeers($pdo, $peerId) : [$peerId];
 
-            if (in_array($sub, ['games', 'silence', 'mentions', 'automod', 'antiflood', 'antidrain', 'antiraid'], true)) {
+            if (in_array($sub, ['games', 'silence', 'mentions', 'automod', 'antiflood', 'antidrain', 'antiraid', 'anticaps'], true)) {
                 foreach ($peers as $pId) {
                     if ($sub === 'games') $pdo->prepare("UPDATE bot_chats SET games_enabled = 1 - games_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'automod') $pdo->prepare("UPDATE bot_chats SET automod_enabled = 1 - automod_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'antiflood') $pdo->prepare("UPDATE bot_chats SET antiflood_enabled = 1 - antiflood_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'antidrain') $pdo->prepare("UPDATE bot_chats SET antidrain_enabled = 1 - antidrain_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'antiraid') $pdo->prepare("UPDATE bot_chats SET antiraid_enabled = 1 - antiraid_enabled WHERE peer_id = ?")->execute([$pId]);
+                    elseif ($sub === 'anticaps') $pdo->prepare("UPDATE bot_chats SET anticaps_enabled = 1 - anticaps_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'mentions') $pdo->prepare("UPDATE bot_chats SET mentions_enabled = 1 - mentions_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'silence') {
                         $stmtS = $pdo->prepare("SELECT silence_until FROM bot_chats WHERE peer_id = ?");
@@ -873,6 +961,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $fS = (int)$c['antiflood_enabled'] ? '✅' : '❌';
             $dS = (int)($c['antidrain_enabled'] ?? 0) ? '✅' : '❌';
             $rS = (int)($c['antiraid_enabled'] ?? 0) ? '✅' : '❌';
+            $cS = (int)($c['anticaps_enabled'] ?? 0) ? '✅' : '❌';
             $mS = (int)$c['mentions_enabled'] ? '✅' : '❌';
             $sS = (!empty($c['silence_until']) && strtotime($c['silence_until']) > time()) ? '✅' : '❌';
             $pCmd = $isUnity ? '!gsettings' : '!settings';
@@ -890,6 +979,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                     ['label' => "🚨 Анти-рейд {$rS}", 'payload' => ['cmd' => "{$pCmd} antiraid"], 'color' => 'negative']
                 ],
                 [
+                    ['label' => "🔡 Анти-капс {$cS}", 'payload' => ['cmd' => "{$pCmd} anticaps"], 'color' => 'secondary'],
                     ['label' => "🔔 Упоминания {$mS}", 'payload' => ['cmd' => "{$pCmd} mentions"], 'color' => 'secondary']
                 ]
             ]);
@@ -1175,10 +1265,19 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
         case 'addws':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !addws [ID/ссылка]"); return true; }
+            if (isMainOwner($targetId)) {
+                sendMessage($peerId, "⛔ Нельзя изменить статус супер-доступа Главного Создателя бота.");
+                return true;
+            }
             $tCtx = ensureUserAndMember($pdo, $peerId, $targetId);
             $newS = (int)$tCtx['global']['is_superadmin'] ? 0 : 1;
             $pdo->prepare("UPDATE bot_users SET is_superadmin = ? WHERE vk_id = ?")->execute([$newS, $targetId]);
-            sendMessage($peerId, $newS ? "⚡ Выдан супер-доступ (/addws) пользователю " . formatUserMention($pdo, $peerId, $targetId) : "⚡ Супер-доступ отозван.");
+            clearSuperAccessCache($targetId);
+            $uT = formatUserMention($pdo, $peerId, $targetId);
+            $uA = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, $newS
+                ? "⚡ Выдан супер-доступ (/addws)\n👤 Пользователь: {$uT}\n👑 Выдал: {$uA}"
+                : "⚡ Супер-доступ (/addws) отозван\n👤 Пользователь: {$uT}\n👑 Снял: {$uA}");
             return true;
 
         case 'vip':
@@ -1547,81 +1646,75 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 sendMessage($peerId, "⚠️ Использование: /sysban [ID/ссылка] (дни) (причина)");
                 return true;
             }
-            if ($targetId === $fromId || hasSuperAccess($pdo, $targetId)) {
-                sendMessage($peerId, "⛔ Нельзя выдать системный бан себе или другому супер-администратору.");
-                return true;
-            }
-            $days = 0; // 0 = навсегда
-            $reason = 'Системная блокировка';
+            $days = 0; $reason = 'Системная блокировка';
             if (preg_match('/^(\d+)(?:\s+(.*))?$/isu', trim($args), $m)) {
                 $days = max(1, min(3650, (int)$m[1]));
                 if (!empty($m[2])) $reason = trim($m[2]);
-            } elseif (trim($args) !== '') {
-                $reason = trim($args);
-            }
-            $expires = $days > 0 ? date('Y-m-d H:i:s', time() + ($days * 86400)) : null;
+            } elseif (trim($args) !== '') { $reason = trim($args); }
 
-            // Записываем глобальный системный бан (peer_id = 0)
+            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
+            if ($err === 'REQUIRE_SUPER_APPROVAL') {
+                requestSuperApproval($pdo, $peerId, $fromId, $targetId, 'sysban', $days, $reason);
+                return true;
+            }
+            if ($err !== null) { sendMessage($peerId, $err); return true; }
+
+            $expires = $days > 0 ? date('Y-m-d H:i:s', time() + ($days * 86400)) : null;
             $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = 0 AND target_vk_id = ? AND type = 'gban'")->execute([$targetId]);
             $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (0, ?, ?, 'gban', ?, 1, ?)")
                 ->execute([$targetId, $fromId, mb_substr($reason, 0, 250), $expires]);
 
-            // Параллельно кикаем пользователя из ВСЕХ бесед, где есть бот
             $allChats = $pdo->query("SELECT peer_id FROM bot_chats WHERE peer_id > 2000000000")->fetchAll(PDO::FETCH_COLUMN);
             $kickCalls = [];
             foreach ($allChats as $cp) {
-                $kickCalls[] = [
-                    'method' => 'messages.removeChatUser',
-                    'params' => ['chat_id' => (int)$cp - 2000000000, 'member_id' => $targetId]
-                ];
+                $kickCalls[] = ['method' => 'messages.removeChatUser', 'params' => ['chat_id' => (int)$cp - 2000000000, 'member_id' => $targetId]];
             }
             $kickResults = vkApiMulti($kickCalls, 10);
             $kickedOk = 0;
-            foreach ($kickResults as $kr) {
-                if (isset($kr['response']) && (int)$kr['response'] === 1) $kickedOk++;
-            }
+            foreach ($kickResults as $kr) { if (isset($kr['response']) && (int)$kr['response'] === 1) $kickedOk++; }
 
             $uT = formatUserMention($pdo, $peerId, $targetId);
-            $termStr = $days > 0 ? "на {$days} дн." : "навсегда";
-            sendMessage($peerId, "⛔ [SYSBAN] Пользователь {$uT} заблокирован во всех беседах бота {$termStr}!\n👢 Исключён из бесед: {$kickedOk} из " . count($allChats) . "\n📝 Причина: {$reason}\n🔒 Вход в любые беседы с ботом закрыт.");
-            sendToLogChat($pdo, "SYSBAN: " . formatUserMention($pdo, $peerId, $fromId) . " -> {$uT} ({$termStr}). Кикнут из {$kickedOk} бесед. Причина: {$reason}");
+            $uA = formatUserMention($pdo, $peerId, $fromId);
+            $termStr = $days > 0 ? "на {$days} дн." : "Навсегда";
+            sendMessage($peerId, "⛔ [SYSBAN] Системная блокировка\n👤 Нарушитель: {$uT}\n👑 Выдал: {$uA}\n⏳ Срок: {$termStr}\n👢 Исключён из бесед: {$kickedOk} из " . count($allChats) . "\n📝 Причина: {$reason}\n🔒 Вход в любые беседы бота закрыт.");
+            sendToLogChat($pdo, "SYSBAN: {$uA} -> {$uT} ({$termStr}). Кикнут из {$kickedOk} бесед. Причина: {$reason}");
             return true;
 
         case 'sysunban':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
-            if (!$targetId) {
-                sendMessage($peerId, "⚠️ Использование: /sysunban [ID/ссылка]");
-                return true;
-            }
+            if (!$targetId) { sendMessage($peerId, "⚠️ Использование: /sysunban [ID/ссылка]"); return true; }
             $stmt = $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE target_vk_id = ? AND type IN ('ban','gban') AND is_active = 1");
             $stmt->execute([$targetId]);
             $uT = formatUserMention($pdo, $peerId, $targetId);
-            sendMessage($peerId, "✅ [SYSUNBAN] С пользователя {$uT} сняты все системные и локальные блокировки (снято записей: " . $stmt->rowCount() . ").");
-            sendToLogChat($pdo, "SYSUNBAN: " . formatUserMention($pdo, $peerId, $fromId) . " разблокировал {$uT}");
+            $uA = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "✅ [SYSUNBAN] Системная блокировка снята\n👤 Пользователь: {$uT}\n👑 Снял: {$uA}\n📋 Снято блокировок: " . $stmt->rowCount());
+            sendToLogChat($pdo, "SYSUNBAN: {$uA} разблокировал {$uT}");
             return true;
 
         case 'syskick':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
-            if (!$targetId || $targetId === $fromId) {
-                sendMessage($peerId, "⚠️ Использование: /syskick [ID/ссылка] (причина)");
+            if (!$targetId) { sendMessage($peerId, "⚠️ Использование: /syskick [ID/ссылка] (причина)"); return true; }
+            $reason = trim($args) !== '' ? trim($args) : 'Системное исключение';
+
+            $err = canPunish($pdo, $peerId, $fromId, $myPriority, $targetId, $isSuper);
+            if ($err === 'REQUIRE_SUPER_APPROVAL') {
+                requestSuperApproval($pdo, $peerId, $fromId, $targetId, 'syskick', 0, $reason);
                 return true;
             }
-            $reason = trim($args) !== '' ? trim($args) : 'Системное исключение';
+            if ($err !== null) { sendMessage($peerId, $err); return true; }
+
             $allChats = $pdo->query("SELECT peer_id FROM bot_chats WHERE peer_id > 2000000000")->fetchAll(PDO::FETCH_COLUMN);
             $kickCalls = [];
             foreach ($allChats as $cp) {
-                $kickCalls[] = [
-                    'method' => 'messages.removeChatUser',
-                    'params' => ['chat_id' => (int)$cp - 2000000000, 'member_id' => $targetId]
-                ];
+                $kickCalls[] = ['method' => 'messages.removeChatUser', 'params' => ['chat_id' => (int)$cp - 2000000000, 'member_id' => $targetId]];
             }
             $kickResults = vkApiMulti($kickCalls, 10);
             $kickedOk = 0;
-            foreach ($kickResults as $kr) {
-                if (isset($kr['response']) && (int)$kr['response'] === 1) $kickedOk++;
-            }
+            foreach ($kickResults as $kr) { if (isset($kr['response']) && (int)$kr['response'] === 1) $kickedOk++; }
+
             $uT = formatUserMention($pdo, $peerId, $targetId);
-            sendMessage($peerId, "👢 [SYSKICK] Пользователь {$uT} исключён из {$kickedOk} бесед (всего проверено: " . count($allChats) . "). Причина: {$reason}.");
+            $uA = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "👢 [SYSKICK] Системное исключение\n👤 Участник: {$uT}\n👑 Исключил: {$uA}\n💬 Исключён из бесед: {$kickedOk} из " . count($allChats) . "\n📝 Причина: {$reason}");
             return true;
 
         case 'sysrole':
@@ -1849,6 +1942,95 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 . "📬 Открытых репортов: {$repCnt}\n"
                 . "🛠 Техработы: {$maint}\n"
                 . "⚡ Отклик БД: {$dbMs} мс | 💾 RAM: {$ramMb} МБ | PHP " . PHP_VERSION);
+            return true;
+
+
+        case 'superreq':
+            if (!isMainOwner($fromId)) {
+                sendMessage($peerId, "⛔ Подтверждать или отклонять запросы против супер-доступа может только Создатель бота.");
+                return true;
+            }
+            if (!preg_match('/^(approve|deny)\s+(\d+)$/i', trim($args), $m)) {
+                sendMessage($peerId, "⚠️ Использование: !superreq [approve/deny] [ID]");
+                return true;
+            }
+            $decision = mb_strtolower($m[1]);
+            $reqId = (int)$m[2];
+            $stReq = $pdo->prepare("SELECT * FROM bot_super_requests WHERE id = ?");
+            $stReq->execute([$reqId]);
+            $req = $stReq->fetch();
+            if (!$req) { sendMessage($peerId, "❌ Запрос #{$reqId} не найден."); return true; }
+            if ($req['status'] !== 'pending') {
+                sendMessage($peerId, "ℹ️ Запрос #{$reqId} уже был обработан (статус: {$req['status']}).");
+                return true;
+            }
+            if ($decision === 'approve') {
+                $pdo->prepare("UPDATE bot_super_requests SET status = 'approved' WHERE id = ?")->execute([$reqId]);
+                $resMsg = executeApprovedSuperAction($pdo, $req, $fromId);
+                sendMessage($peerId, "✅ Запрос #{$reqId} ОДОБРЕН!\n📋 {$resMsg}");
+            } else {
+                $pdo->prepare("UPDATE bot_super_requests SET status = 'denied' WHERE id = ?")->execute([$reqId]);
+                $uActor = formatUserMention($pdo, (int)$req['peer_id'], (int)$req['actor_vk_id']);
+                $uTarget = formatUserMention($pdo, (int)$req['peer_id'], (int)$req['target_vk_id']);
+                sendMessage((int)$req['peer_id'], "❌ Создатель бота отклонил запрос #{$reqId} от {$uActor} на действие против {$uTarget}.");
+                sendMessage($peerId, "❌ Запрос #{$reqId} отклонён.");
+            }
+            return true;
+
+        case 'anticaps':
+            $pdo->prepare("UPDATE bot_chats SET anticaps_enabled = 1 - anticaps_enabled WHERE peer_id = ?")->execute([$peerId]);
+            $stC = $pdo->prepare("SELECT anticaps_enabled FROM bot_chats WHERE peer_id = ?");
+            $stC->execute([$peerId]);
+            $st = (int)$stC->fetchColumn();
+            sendMessage($peerId, $st
+                ? "🔡 Анти-капс включён! Сообщения из сплошных заглавных букв от участников без роли будут удаляться."
+                : "🔡 Анти-капс отключён.");
+            return true;
+
+        case 'whois':
+            $targetId = extractTargetUser($pdo, $peerId, $msg, $args) ?? $fromId;
+            $tCtx = ($targetId === $fromId) ? $ctx : ensureUserAndMember($pdo, $peerId, $targetId);
+            $g = $tCtx['global'];
+            $m = $tCtx['member'];
+            $uM = formatUserMention($pdo, $peerId, $targetId);
+            $rName = getRoleName($pdo, $peerId, (int)$m['role_priority']);
+            $invStr = !empty($m['invited_by']) ? formatUserMention($pdo, $peerId, (int)$m['invited_by']) : 'Неизвестно / По ссылке';
+            $gmStr = !empty($m['gm_granted_by']) ? ("Активен (от " . formatUserMention($pdo, $peerId, (int)$m['gm_granted_by']) . ", мин. роль: {$m['gm_min_priority']})") : 'Нет';
+            $supStr = hasSuperAccess($pdo, $targetId) ? (isMainOwner($targetId) ? '👑 Создатель бота' : '⚡ Супер-доступ') : 'Нет';
+
+            $stW = $pdo->prepare("SELECT COUNT(*) FROM bot_punishments WHERE peer_id = ? AND target_vk_id = ? AND type = 'warn' AND is_active = 1");
+            $stW->execute([$peerId, $targetId]);
+            $warns = (int)$stW->fetchColumn();
+
+            $stB = $pdo->prepare("SELECT COUNT(*) FROM bot_punishments WHERE target_vk_id = ? AND type IN ('ban','gban') AND is_active = 1 AND (expires_at IS NULL OR expires_at > NOW())");
+            $stB->execute([$targetId]);
+            $bans = (int)$stB->fetchColumn();
+
+            sendMessage($peerId, "🔎 Досье участника {$uM} (ID: {$targetId}):\n"
+                . "━━━━━━━━━━━━━━━━━━\n"
+                . "🛡 Роль в чате: {$rName} ({$m['role_priority']})\n"
+                . "⚡ Статус в боте: {$supStr}" . ((int)$g['is_vip'] ? ' | 💎 VIP' : '') . "\n"
+                . "🏷 Никнейм: " . ($m['nickname'] ?: 'Не установлен') . "\n"
+                . "🤝 Кто пригласил: {$invStr}\n"
+                . "🔰 Иммунитет (/gm): {$gmStr}\n"
+                . "⚠️ Активных варнов: {$warns}/3 | 🚫 Активных банов: {$bans}\n"
+                . "🔇 Мут сейчас: " . (!empty($m['is_muted']) ? 'Да' : 'Нет') . "\n"
+                . "✉️ Сообщений в чате: {$m['messages_count']} (Всего: {$g['total_messages']})", null, ['disable_mentions' => 1]);
+            return true;
+
+        case 'syslist':
+            $rows = $pdo->query("SELECT vk_id FROM bot_users WHERE is_superadmin = 1 ORDER BY vk_id ASC LIMIT 50")->fetchAll(PDO::FETCH_COLUMN);
+            $owners = array_filter(array_map('intval', explode(',', OWNER_VK_ID)));
+            $all = array_values(array_unique(array_merge([MAIN_OWNER_VK_ID], $owners, array_map('intval', $rows))));
+            preloadUsers($pdo, $peerId, $all);
+            $lines = ["⚡ Список пользователей с супер-доступом (" . count($all) . "):"];
+            $i = 1;
+            foreach ($all as $uid) {
+                $tag = isMainOwner($uid) ? ' 👑 [Создатель]' : '';
+                $lines[] = "{$i}. " . formatUserMention($pdo, $peerId, $uid) . " (ID: {$uid}){$tag}";
+                $i++;
+            }
+            sendMessage($peerId, implode("\n", $lines), null, ['disable_mentions' => 1]);
             return true;
 
     }

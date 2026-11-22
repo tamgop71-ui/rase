@@ -203,6 +203,11 @@ function resolveCanonicalCommand(string $rawCmd): string {
         'botunban' => 'botunban', 'ботунбан' => 'botunban',
         'maintenance' => 'maintenance', 'техработы' => 'maintenance',
         'sysstats' => 'sysstats', 'сисстата' => 'sysstats', 'ботстата' => 'sysstats',
+        'superreq' => 'superreq',
+        'anticaps' => 'anticaps', 'антикапс' => 'anticaps', 'капс' => 'anticaps',
+        'whois' => 'whois', 'досье' => 'whois', 'проверить' => 'whois',
+        'syslist' => 'syslist', 'суперсписок' => 'syslist', 'сиссписок' => 'syslist',
+
 
 
 
@@ -219,7 +224,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'stats' => 20, 'chatinfo' => 20, 'mute' => 20, 'unmute' => 20, 'kick' => 20,
         'warn' => 20, 'unwarn' => 20, 'getwarns' => 20, 'getwarn' => 20, 'warnlist' => 20, 'mutelist' => 20,
         'getban' => 20, 'getmute' => 20, 'nick' => 20, 'snick' => 20, 'rnick' => 20,
-        'nlist' => 20, 'nonames' => 20, 'checknicks' => 20, 'zov' => 20, 'reg' => 20, 'kpi' => 20,
+        'nlist' => 20, 'nonames' => 20, 'checknicks' => 20, 'zov' => 20, 'reg' => 20, 'kpi' => 20, 'whois' => 20,
 
         // >= 40 (Модератор)
         'ban' => 40, 'unban' => 40, 'banlist' => 40, 'clear' => 40, 'helper' => 40,
@@ -240,7 +245,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'settings' => 100, 'gsettings' => 100, 'setup' => 100, 'unity' => 100, 'unites' => 100,
         'addunity' => 100, 'createunity' => 100, 'editunity' => 100, 'removeunity' => 100,
         'deleteunity' => 100, 'sync' => 100, 'spec' => 100, 'gspec' => 100, 'wipe' => 100,
-        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100, 'antidrain' => 100, 'antiraid' => 100,
+        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100, 'antidrain' => 100, 'antiraid' => 100, 'anticaps' => 100,
         'editcmd' => 100, 'geditcmd' => 100, 'gedit' => 100, 'owner' => 100,
 
         // 999 (Супер-доступ / Создатель)
@@ -249,7 +254,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'listen' => 999, 'chatlist' => 999, 'userchats' => 999, 'ahistory' => 999, 'checkban' => 999,
         'sysban' => 999, 'sysunban' => 999, 'syskick' => 999, 'sysrole' => 999, 'sysnick' => 999,
         'giverub' => 999, 'givesoo' => 999, 'broadcast' => 999, 'botban' => 999, 'botunban' => 999,
-        'maintenance' => 999, 'sysstats' => 999,
+        'maintenance' => 999, 'sysstats' => 999, 'superreq' => 999, 'syslist' => 999,
     ];
     return $priorities[$cmd] ?? 0;
 }
