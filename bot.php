@@ -267,9 +267,18 @@ if ($data['type'] === 'message_new') {
                 exit('ok');
             }
 
-            // Умный Автомод ссылок с Белым списком (!whitelist)
-            if ((int)($ctx['chat']['automod_enabled'] ?? 0) === 1 && $myPriority <= 0 && $text !== '') {
-                $blocked = findBlockedLink($pdo, $peerId, $text);
+            // Анти-стикер (!антистикер) — 0 SQL-запросов
+            if ($hasSticker && (int)($ctx['chat']['antisticker_enabled'] ?? 0) === 1 && $myPriority <= 0) {
+                if (checkAntiSticker($peerId, $fromId)) {
+                    if ($cmid > 0) deleteMessage($peerId, [$cmid]);
+                    sendMessage($peerId, "🎭 " . formatUserMention($pdo, $peerId, $fromId) . ", не спамьте стикерами!");
+                    exit('ok');
+                }
+            }
+
+            // Умный Автомод ссылок и вложений с Белым списком (!whitelist)
+            if ((int)($ctx['chat']['automod_enabled'] ?? 0) === 1 && $myPriority <= 0 && ($text !== '' || !empty($msg['attachments']))) {
+                $blocked = findBlockedLink($pdo, $peerId, $text, $msg['attachments'] ?? []);
                 if ($blocked !== null) {
                     if ($cmid > 0) deleteMessage($peerId, [$cmid]);
                     sendMessage($peerId, "🤖 " . formatUserMention($pdo, $peerId, $fromId) . ", сторонние ссылки и реклама запрещены! Разрешены только домены из !whitelist.");

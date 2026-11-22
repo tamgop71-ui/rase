@@ -213,6 +213,20 @@ function resolveCanonicalCommand(string $rawCmd): string {
         'отпуска' => 'vacations', 'vacations' => 'vacations',
         'sysaudit' => 'sysaudit', 'сисаудит' => 'sysaudit', 'аудит' => 'sysaudit',
         'clone' => 'clonechat', 'клонировать' => 'clonechat',
+        'antisticker' => 'antisticker', 'антистикер' => 'antisticker',
+        'объявлениечат' => 'announce', 'announce' => 'announce', 'анонс' => 'announce',
+        'masskick' => 'masskick', 'маскик' => 'masskick', 'масскик' => 'masskick',
+        'massban' => 'massban', 'массбан' => 'massban', 'масбан' => 'massban',
+        'backup' => 'backup', 'бэкап' => 'backup', 'резерв' => 'backup',
+        'transferowner' => 'transferowner', 'передать' => 'transferowner',
+        'disablecmd' => 'disablecmd', 'запретить' => 'disablecmd',
+        'enablecmd' => 'enablecmd', 'разрешить' => 'enablecmd',
+        'resetsettings' => 'resetsettings', 'очиститьнастройки' => 'resetsettings',
+        'sysreset' => 'sysreset', 'сиссброс' => 'sysreset', 'сбросюзера' => 'sysreset',
+        'sysunmute' => 'sysunmute', 'сисунмут' => 'sysunmute',
+        'sysleave' => 'sysleave', 'выйтиизчата' => 'sysleave',
+        'clearcache' => 'clearcache', 'сброскэша' => 'clearcache',
+
 
 
 
@@ -239,20 +253,20 @@ function getDefaultCmdPriority(string $cmd): int {
         'findnick' => 40, 'gzov' => 40, 'gkick' => 40, 'gsnick' => 40, 'grnick' => 40,
 
         // >= 60 (Администратор)
-        'grole' => 60, 'temprole' => 60, 'ghelper' => 60, 'gmoder' => 60, 'moder' => 60, 'gban' => 60,
+        'grole' => 60, 'temprole' => 60, 'announce' => 60, 'masskick' => 60, 'ghelper' => 60, 'gmoder' => 60, 'moder' => 60, 'gban' => 60,
         'gunban' => 60, 'delmsg' => 60, 'gm' => 60, 'removegm' => 60, 'gms' => 60, 'reports' => 60,
 
         // >= 80 (Главный администратор)
         'pin' => 80, 'unpin' => 80, 'admin' => 80, 'gadmin' => 80, 'newrole' => 80,
         'gnewrole' => 80, 'delrole' => 80, 'gdelrole' => 80, 'welcome' => 80,
         'setrules' => 80, 'delrules' => 80, 'setnote' => 80, 'inactive' => 80,
-        'givemoney' => 80, 'timeuved' => 80, 'enick' => 80, 'whitelist' => 80, 'filter' => 80, 'trigger' => 80, 'createpromo' => 80,
+        'givemoney' => 80, 'timeuved' => 80, 'enick' => 80, 'whitelist' => 80, 'massban' => 80, 'filter' => 80, 'trigger' => 80, 'createpromo' => 80,
 
         // 100 (Владелец)
         'settings' => 100, 'gsettings' => 100, 'setup' => 100, 'unity' => 100, 'unites' => 100,
         'addunity' => 100, 'createunity' => 100, 'editunity' => 100, 'removeunity' => 100,
         'deleteunity' => 100, 'sync' => 100, 'spec' => 100, 'gspec' => 100, 'wipe' => 100,
-        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100, 'antidrain' => 100, 'antiraid' => 100, 'anticaps' => 100, 'clonechat' => 100,
+        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100, 'antidrain' => 100, 'antiraid' => 100, 'anticaps' => 100, 'antisticker' => 100, 'clonechat' => 100, 'backup' => 100, 'transferowner' => 100, 'disablecmd' => 100, 'enablecmd' => 100, 'resetsettings' => 100,
         'editcmd' => 100, 'geditcmd' => 100, 'gedit' => 100, 'owner' => 100,
 
         // 999 (Супер-доступ / Создатель)
@@ -261,7 +275,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'listen' => 999, 'chatlist' => 999, 'userchats' => 999, 'ahistory' => 999, 'checkban' => 999,
         'sysban' => 999, 'sysunban' => 999, 'syskick' => 999, 'sysrole' => 999, 'sysnick' => 999,
         'giverub' => 999, 'givesoo' => 999, 'broadcast' => 999, 'botban' => 999, 'botunban' => 999,
-        'maintenance' => 999, 'sysstats' => 999, 'superreq' => 999, 'syslist' => 999, 'sysaudit' => 999, 'koch' => 999,
+        'maintenance' => 999, 'sysstats' => 999, 'superreq' => 999, 'syslist' => 999, 'sysaudit' => 999, 'sysreset' => 999, 'sysunmute' => 999, 'sysleave' => 999, 'clearcache' => 999, 'koch' => 999,
     ];
     return $priorities[$cmd] ?? 0;
 }
@@ -289,6 +303,10 @@ function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int
             $reqPriority = 0;
         } else {
             $reqPriority = getRequiredPriority($pdo, $peerId, $cmd, $defaultReq);
+        }
+        if (!$isSuper && $reqPriority >= 101) {
+            sendMessage($peerId, "🔒 Команда «{$cmd}» отключена владельцем в этой беседе.");
+            return;
         }
         if (!$isSuper && $myPriority < $reqPriority) {
             $reqRole = getRoleName($pdo, $peerId, $reqPriority);

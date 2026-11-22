@@ -124,9 +124,26 @@ function cacheDel(string $key): void {
 /**
  * Очистка протухших временных файлов в /tmp (вызывается из worker.php)
  */
+
+/**
+ * Полная очистка локального кэша в /tmp (команда /clearcache)
+ */
+function cacheClearAll(): int {
+    $removed = 0;
+    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/st_*.txt', '/tmp/rep_*.txt'];
+    foreach ($patterns as $pat) {
+        $list = glob($pat);
+        if (!$list) continue;
+        foreach ($list as $f) {
+            if (@unlink($f)) $removed++;
+        }
+    }
+    return $removed;
+}
+
 function cleanupTmpCache(): void {
     $now = time();
-    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/rep_*.txt'];
+    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/rep_*.txt'];
     foreach ($patterns as $pat) {
         $list = glob($pat);
         if (!$list) continue;

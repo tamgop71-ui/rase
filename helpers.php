@@ -113,7 +113,7 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
             u.total_messages, u.total_chars, u.total_stickers,
             c.peer_id AS c_exists, c.title, c.owner_vk_id, c.unity_id, c.rules_text, c.welcome_text,
             c.games_enabled, c.silence_until, c.silence_action, c.automod_enabled, c.antiflood_enabled,
-            c.antidrain_enabled, c.antiraid_enabled, c.anticaps_enabled, c.slowmode_sec, c.mentions_enabled,
+            c.antidrain_enabled, c.antiraid_enabled, c.anticaps_enabled, c.antisticker_enabled, c.slowmode_sec, c.mentions_enabled,
             c.listen_target_vk_id, c.listen_until, c.total_messages AS chat_total_messages,
             m.vk_id AS m_exists, m.nickname, m.emoji, m.role_priority, m.gm_granted_by, m.gm_min_priority,
             m.mention_opt_in, m.invited_by, m.temp_role_until, m.vacation_until, m.vacation_reason, m.messages_count, m.chars_count, m.stickers_count, m.joined_at, m.last_active_at,
@@ -257,6 +257,7 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
         'antidrain_enabled'   => (int)($row['antidrain_enabled'] ?? 0),
         'antiraid_enabled'    => (int)($row['antiraid_enabled'] ?? 0),
         'anticaps_enabled'    => (int)($row['anticaps_enabled'] ?? 0),
+        'antisticker_enabled' => (int)($row['antisticker_enabled'] ?? 0),
         'slowmode_sec'        => (int)($row['slowmode_sec'] ?? 0),
         'mentions_enabled'    => (int)($row['mentions_enabled'] ?? 1),
         'listen_target_vk_id' => $row['listen_target_vk_id'] ?? null,
@@ -685,37 +686,151 @@ function getRequiredPriority(PDO $pdo, int $peerId, string $canonicalCmd, int $d
     return $cached[$canonicalCmd] ?? $defaultPriority;
 }
 
-function getChatWhitelist(PDO $pdo, int $peerId): array {
-    $cached = cacheGet("wl_{$peerId}", 60);
+/**
+ * Нормализация домена/ссылки для белого списка:
+ * убирает протокол, www., m., лишние пробелы, знаки препинания и завершающий слэш.
+ */
+function normalizeWhitelistEntry(string $raw): string {
+    $s = trim($raw, " \t\n\r\0\x0B.,!?;:()[]<>\"'");
+    $s = preg_replace('/^https?:\/\//i', '', $s);
+    $s = preg_replace('/^(?:www\.|m\.)/i', '', (string)$s);
+    $s = rtrim((string)$s, '/');
+    return mb_strtolower($s);
+}
+
+/**
+ * Раздельный кэш глобального (wl_0) и локального (wl_{peerId}) белого списка.
+ * Изменение глобального белого списка мгновенно применяется во всех беседах через cacheDel('wl_0').
+ */
+function getGlobalWhitelist(PDO $pdo): array {
+    $cached = cacheGet('wl_0', 120);
     if (is_array($cached)) return $cached;
-    $stmt = $pdo->prepare("SELECT domain FROM bot_whitelist WHERE peer_id IN (0, ?) ORDER BY peer_id ASC, domain ASC");
+    $stmt = $pdo->query("SELECT domain FROM bot_whitelist WHERE peer_id = 0 ORDER BY domain ASC");
+    $list = array_values(array_unique(array_filter(array_map('normalizeWhitelistEntry', $stmt->fetchAll(PDO::FETCH_COLUMN)))));
+    cacheSet('wl_0', $list);
+    return $list;
+}
+
+function getLocalWhitelist(PDO $pdo, int $peerId): array {
+    $cached = cacheGet("wl_{$peerId}", 120);
+    if (is_array($cached)) return $cached;
+    $stmt = $pdo->prepare("SELECT domain FROM bot_whitelist WHERE peer_id = ? ORDER BY domain ASC");
     $stmt->execute([$peerId]);
-    $list = array_values(array_unique(array_map('mb_strtolower', $stmt->fetchAll(PDO::FETCH_COLUMN))));
+    $list = array_values(array_unique(array_filter(array_map('normalizeWhitelistEntry', $stmt->fetchAll(PDO::FETCH_COLUMN)))));
     cacheSet("wl_{$peerId}", $list);
     return $list;
 }
 
-function findBlockedLink(PDO $pdo, int $peerId, string $text): ?string {
-    $pattern = '/(?:https?:\/\/|www\.)[^\s<>"\']+|(?:vk\.cc|t\.me|telegram\.me|discord\.gg|discord\.com\/invite|vk\.(?:com|ru)\/(?:club|public|join)|[a-z0-9\-]+\.(?:ru|com|net|org|online|site|xyz|su|fun|gg|me|io|tv|cc))(?:\/[^\s<>"\']*)?/iu';
-    if (!preg_match_all($pattern, $text, $matches)) {
-        return null;
-    }
-    $whitelist = getChatWhitelist($pdo, $peerId);
-    foreach ($matches[0] as $foundUrl) {
-        $norm = mb_strtolower(preg_replace('/^(?:https?:\/\/)?(?:www\.)?/i', '', trim($foundUrl, ".,!?;:()[]")));
-        $allowed = false;
-        foreach ($whitelist as $w) {
-            $wNorm = mb_strtolower(preg_replace('/^(?:https?:\/\/)?(?:www\.)?/i', '', trim($w)));
-            if ($wNorm !== '' && (str_starts_with($norm, $wNorm) || str_contains($norm, $wNorm))) {
-                $allowed = true;
-                break;
+function getChatWhitelist(PDO $pdo, int $peerId): array {
+    return array_values(array_unique(array_merge(getGlobalWhitelist($pdo), getLocalWhitelist($pdo, $peerId))));
+}
+
+/**
+ * Точная проверка одной ссылки на соответствие белому списку (защита от обхода вида evil.ru/?q=allowed.ru)
+ */
+function isUrlWhitelisted(string $rawUrl, array $whitelist): bool {
+    $norm = normalizeWhitelistEntry($rawUrl);
+    if ($norm === '') return true;
+
+    $parts = explode('/', $norm, 2);
+    $host = preg_replace('/:\d+$/', '', $parts[0]); // убираем порт, если есть
+    $path = isset($parts[1]) ? explode('?', explode('#', $parts[1], 2)[0], 2)[0] : '';
+    $path = rtrim((string)$path, '/');
+
+    // Считаем vk.com и vk.ru эквивалентными при проверке путей групп/страниц
+    $hostVariants = [$host];
+    if ($host === 'vk.com') $hostVariants[] = 'vk.ru';
+    elseif ($host === 'vk.ru') $hostVariants[] = 'vk.com';
+
+    foreach ($whitelist as $w) {
+        $wNorm = normalizeWhitelistEntry($w);
+        if ($wNorm === '') continue;
+
+        $wParts = explode('/', $wNorm, 2);
+        $wHost = preg_replace('/:\d+$/', '', $wParts[0]);
+        $wPath = isset($wParts[1]) ? rtrim(explode('?', explode('#', $wParts[1], 2)[0], 2)[0], '/') : '';
+
+        if ($wPath === '') {
+            // Разрешён весь домен и его поддомены (например forum-raserussia.online и sub.forum-raserussia.online)
+            foreach ($hostVariants as $hv) {
+                if ($hv === $wHost || str_ends_with($hv, '.' . $wHost)) {
+                    return true;
+                }
+            }
+        } else {
+            // Разрешён конкретный путь (например vk.ru/club241844424 и vk.ru/club241844424/...)
+            $hostOk = false;
+            foreach ($hostVariants as $hv) {
+                if ($hv === $wHost || str_ends_with($hv, '.' . $wHost)) {
+                    $hostOk = true;
+                    break;
+                }
+            }
+            if ($hostOk && ($path === $wPath || str_starts_with($path, $wPath . '/'))) {
+                return true;
             }
         }
-        if (!$allowed) {
+    }
+    return false;
+}
+
+/**
+ * Проверка текста и вложений сообщения на запрещённые ссылки с учётом белого списка (!whitelist)
+ */
+function findBlockedLink(PDO $pdo, int $peerId, string $text, array $attachments = []): ?string {
+    $candidates = [];
+
+    if ($text !== '') {
+        $pattern = '/(?:https?:\/\/|www\.)[^\s<>"\']+|(?:vk\.cc|vk\.me|t\.me|telegram\.me|discord\.gg|discord\.com\/invite|vk\.(?:com|ru)\/(?:club|public|join|id\d+|app\d+|[a-z0-9_\.]+)|[a-z0-9][a-z0-9\-]*\.(?:ru|com|net|org|online|site|xyz|su|fun|gg|me|io|tv|cc|pro|shop|store|top|pw|rf|рф))(?:\/[^\s<>"\']*)?/iu';
+        if (preg_match_all($pattern, $text, $matches)) {
+            foreach ($matches[0] as $u) {
+                // Игнорируем упоминания пользователей вида [id123|Name]
+                $candidates[] = $u;
+            }
+        }
+    }
+
+    // Проверяем вложения ВК (прикреплённые ссылки и репосты чужих сообществ)
+    foreach ($attachments as $att) {
+        $type = (string)($att['type'] ?? '');
+        if ($type === 'link' && !empty($att['link']['url'])) {
+            $candidates[] = (string)$att['link']['url'];
+        } elseif ($type === 'wall' && !empty($att['wall']['owner_id']) && (int)$att['wall']['owner_id'] < 0) {
+            $gid = abs((int)$att['wall']['owner_id']);
+            $candidates[] = "vk.ru/club{$gid}";
+        }
+    }
+
+    if (empty($candidates)) return null;
+
+    $whitelist = getChatWhitelist($pdo, $peerId);
+    foreach ($candidates as $foundUrl) {
+        if (!isUrlWhitelisted($foundUrl, $whitelist)) {
             return $foundUrl;
         }
     }
     return null;
+}
+
+/**
+ * Анти-стикер спам через /tmp (0 SQL-запросов): 3+ стикера за 15 секунд
+ */
+function checkAntiSticker(int $peerId, int $vkId): bool {
+    $file = "/tmp/st_{$peerId}_{$vkId}.txt";
+    $now = time();
+    $times = [];
+    if (is_file($file)) {
+        $raw = @file_get_contents($file);
+        if ($raw) {
+            foreach (explode(',', $raw) as $t) {
+                $ti = (int)$t;
+                if (($now - $ti) <= 15) $times[] = $ti;
+            }
+        }
+    }
+    $times[] = $now;
+    @file_put_contents($file, implode(',', $times));
+    return count($times) >= 3;
 }
 
 function getChatFilters(PDO $pdo, int $peerId): array {

@@ -935,7 +935,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $sub = mb_strtolower(trim($args));
             $peers = $isUnity ? getUnityPeers($pdo, $peerId) : [$peerId];
 
-            if (in_array($sub, ['games', 'silence', 'mentions', 'automod', 'antiflood', 'antidrain', 'antiraid', 'anticaps'], true)) {
+            if (in_array($sub, ['games', 'silence', 'mentions', 'automod', 'antiflood', 'antidrain', 'antiraid', 'anticaps', 'antisticker'], true)) {
                 foreach ($peers as $pId) {
                     if ($sub === 'games') $pdo->prepare("UPDATE bot_chats SET games_enabled = 1 - games_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'automod') $pdo->prepare("UPDATE bot_chats SET automod_enabled = 1 - automod_enabled WHERE peer_id = ?")->execute([$pId]);
@@ -943,6 +943,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                     elseif ($sub === 'antidrain') $pdo->prepare("UPDATE bot_chats SET antidrain_enabled = 1 - antidrain_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'antiraid') $pdo->prepare("UPDATE bot_chats SET antiraid_enabled = 1 - antiraid_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'anticaps') $pdo->prepare("UPDATE bot_chats SET anticaps_enabled = 1 - anticaps_enabled WHERE peer_id = ?")->execute([$pId]);
+                    elseif ($sub === 'antisticker') $pdo->prepare("UPDATE bot_chats SET antisticker_enabled = 1 - antisticker_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'mentions') $pdo->prepare("UPDATE bot_chats SET mentions_enabled = 1 - mentions_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'silence') {
                         $stmtS = $pdo->prepare("SELECT silence_until FROM bot_chats WHERE peer_id = ?");
@@ -962,6 +963,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $dS = (int)($c['antidrain_enabled'] ?? 0) ? '✅' : '❌';
             $rS = (int)($c['antiraid_enabled'] ?? 0) ? '✅' : '❌';
             $cS = (int)($c['anticaps_enabled'] ?? 0) ? '✅' : '❌';
+            $stS = (int)($c['antisticker_enabled'] ?? 0) ? '✅' : '❌';
             $mS = (int)$c['mentions_enabled'] ? '✅' : '❌';
             $sS = (!empty($c['silence_until']) && strtotime($c['silence_until']) > time()) ? '✅' : '❌';
             $pCmd = $isUnity ? '!gsettings' : '!settings';
@@ -980,6 +982,9 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 ],
                 [
                     ['label' => "🔡 Анти-капс {$cS}", 'payload' => ['cmd' => "{$pCmd} anticaps"], 'color' => 'secondary'],
+                    ['label' => "🎭 Анти-стикер {$stS}", 'payload' => ['cmd' => "{$pCmd} antisticker"], 'color' => 'secondary']
+                ],
+                [
                     ['label' => "🔔 Упоминания {$mS}", 'payload' => ['cmd' => "{$pCmd} mentions"], 'color' => 'secondary']
                 ]
             ]);
@@ -1443,42 +1448,93 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
         // ==========================================
         case 'whitelist':
             $raw = trim($args);
-            if ($raw === '') {
-                $list = getChatWhitelist($pdo, $peerId);
-                if (empty($list)) {
-                    sendMessage($peerId, "🔗 Белый список ссылок пуст.\nДобавить: !whitelist +forum-raserussia.online\nУдалить: !whitelist -forum-raserussia.online");
-                } else {
-                    sendMessage($peerId, "🔗 Белый список ссылок беседы (пропускаются автомодом):\n• " . implode("\n• ", $list) . "\n\nУправление: !whitelist +домен | !whitelist -домен");
+            $lowRaw = mb_strtolower($raw);
+
+            // Просмотр списка
+            if ($raw === '' || in_array($lowRaw, ['list', 'список', 'show'], true)) {
+                $globList = getGlobalWhitelist($pdo);
+                $locList  = getLocalWhitelist($pdo, $peerId);
+                $lines = ["🔗 Белый список ссылок (пропускаются автомодом):"];
+                if (!empty($globList)) {
+                    $lines[] = "\n🌐 Глобальные (на все беседы):";
+                    foreach ($globList as $d) $lines[] = "• {$d}";
                 }
+                if (!empty($locList)) {
+                    $lines[] = "\n💬 Локальные (эта беседа):";
+                    foreach ($locList as $d) $lines[] = "• {$d}";
+                }
+                if (empty($globList) && empty($locList)) {
+                    $lines[] = "Список пуст.";
+                }
+                $lines[] = "\nУправление:";
+                $lines[] = "• !whitelist +forum-raserussia.online — добавить";
+                $lines[] = "• !whitelist -forum-raserussia.online — удалить";
+                $lines[] = "• !whitelist clear — очистить локальный список";
+                if ($isSuper) {
+                    $lines[] = "• !whitelist global +домен / -домен — глобально";
+                }
+                sendMessage($peerId, implode("\n", $lines));
                 return true;
             }
-            $isDel = false;
-            if (preg_match('/^(?:add|\+)\s*(.+)$/iu', $raw, $m)) {
-                $dom = trim($m[1]);
-            } elseif (preg_match('/^(?:del|remove|-)\s*(.+)$/iu', $raw, $m)) {
-                $isDel = true;
-                $dom = trim($m[1]);
-            } else {
-                $dom = $raw;
-            }
-            $dom = mb_strtolower(preg_replace('/^(?:https?:\/\/)?(?:www\.)?/i', '', trim($dom, " /")));
-            if ($dom === '' || mb_strlen($dom) > 120) {
-                sendMessage($peerId, "⚠️ Укажите корректный домен или ссылку! Пример: !whitelist +forum-raserussia.online");
-                return true;
-            }
-            $targetWlPeer = $peerId;
-            if ($isSuper && preg_match('/^(?:global|глоб)\s+(.+)$/iu', $dom, $gm)) {
-                $targetWlPeer = 0;
-                $dom = trim($gm[1]);
-            }
-            if ($isDel) {
-                $pdo->prepare("DELETE FROM bot_whitelist WHERE peer_id = ? AND domain = ?")->execute([$targetWlPeer, $dom]);
+
+            // Очистка локального списка беседы
+            if (in_array($lowRaw, ['clear', 'очистить', 'сброс'], true)) {
+                $stmt = $pdo->prepare("DELETE FROM bot_whitelist WHERE peer_id = ?");
+                $stmt->execute([$peerId]);
                 cacheDel("wl_{$peerId}");
-                sendMessage($peerId, "🗑 «{$dom}» удалён из белого списка ссылок беседы.");
+                sendMessage($peerId, "🧹 Локальный белый список ссылок беседы очищен (удалено записей: " . $stmt->rowCount() . ").");
+                return true;
+            }
+
+            // Корректный разбор флагов global и +/- в ЛЮБОМ порядке:
+            // global +url | +global url | global -url | -global url | +url | -url | add url | del url
+            $isGlobal = false;
+            $isDel = false;
+            $work = $raw;
+
+            for ($pass = 0; $pass < 2; $pass++) {
+                if (preg_match('/^(?:global|глоб|глобально)\s+(.+)$/iu', $work, $m)) {
+                    $isGlobal = true;
+                    $work = trim($m[1]);
+                } elseif (preg_match('/^(?:add|\+)\s*(.+)$/iu', $work, $m)) {
+                    $isDel = false;
+                    $work = trim($m[1]);
+                } elseif (preg_match('/^(?:del|delete|remove|-)\s*(.+)$/iu', $work, $m)) {
+                    $isDel = true;
+                    $work = trim($m[1]);
+                }
+            }
+
+            if ($isGlobal && !$isSuper) {
+                sendMessage($peerId, "⛔ Изменять глобальный белый список могут только пользователи с супер-доступом.");
+                return true;
+            }
+
+            $dom = normalizeWhitelistEntry($work);
+            if ($dom === '' || mb_strlen($dom) > 120 || !str_contains($dom, '.')) {
+                sendMessage($peerId, "⚠️ Укажите корректный домен или ссылку! Пример:\n• !whitelist +forum-raserussia.online\n• !whitelist +vk.ru/club241844424");
+                return true;
+            }
+
+            $targetWlPeer = $isGlobal ? 0 : $peerId;
+            $scopeLabel = $isGlobal ? "глобального белого списка" : "белого списка беседы";
+
+            if ($isDel) {
+                $stmt = $pdo->prepare("DELETE FROM bot_whitelist WHERE peer_id = ? AND domain = ?");
+                $stmt->execute([$targetWlPeer, $dom]);
+                cacheDel($isGlobal ? 'wl_0' : "wl_{$peerId}");
+                if ($stmt->rowCount() > 0) {
+                    sendMessage($peerId, "🗑 «{$dom}» удалён из {$scopeLabel}.\n👮 Удалил: " . formatUserMention($pdo, $peerId, $fromId));
+                } else {
+                    $inGlobal = !$isGlobal && in_array($dom, getGlobalWhitelist($pdo), true);
+                    sendMessage($peerId, $inGlobal
+                        ? "ℹ️ «{$dom}» находится в глобальном белом списке. Удалить его может супер-доступ командой: !whitelist global -{$dom}"
+                        : "❌ «{$dom}» не найден в {$scopeLabel}.");
+                }
             } else {
                 $pdo->prepare("INSERT IGNORE INTO bot_whitelist (peer_id, domain, added_by) VALUES (?, ?, ?)")->execute([$targetWlPeer, $dom, $fromId]);
-                cacheDel("wl_{$peerId}");
-                sendMessage($peerId, "✅ «{$dom}» добавлен в белый список ссылок! Автомод будет пропускать эти ссылки.");
+                cacheDel($isGlobal ? 'wl_0' : "wl_{$peerId}");
+                sendMessage($peerId, "✅ «{$dom}» добавлен в {$scopeLabel}!\n👮 Добавил: " . formatUserMention($pdo, $peerId, $fromId) . "\n🤖 Автомод теперь пропускает этот адрес и его поддомены.");
             }
             return true;
 
@@ -2153,6 +2209,198 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             cacheDel("trg_{$peerId}");
 
             sendMessage($peerId, "📋 Настройки успешно клонированы из беседы «{$src['title']}» ({$srcPeer})!\nСкопированы: правила, приветствие, режимы защиты, роли, !whitelist, !фильтр и !триггер.");
+            return true;
+
+
+        // ==========================================
+        // НОВЫЕ ФУНКЦИИ: АДМИНЫ, ВЛАДЕЛЕЦ, СУПЕР-ДОСТУП
+        // ==========================================
+        case 'antisticker':
+            $pdo->prepare("UPDATE bot_chats SET antisticker_enabled = 1 - antisticker_enabled WHERE peer_id = ?")->execute([$peerId]);
+            $stS = $pdo->prepare("SELECT antisticker_enabled FROM bot_chats WHERE peer_id = ?");
+            $stS->execute([$peerId]);
+            $st = (int)$stS->fetchColumn();
+            sendMessage($peerId, $st
+                ? "🎭 Анти-стикер включён! При отправке 3+ стикеров за 15 секунд от участника без роли бот будет удалять их."
+                : "🎭 Анти-стикер отключён.");
+            return true;
+
+        case 'announce':
+            $txt = trim($args);
+            if ($txt === '') {
+                sendMessage($peerId, "📢 Использование: !объявление [текст важного объявления]");
+                return true;
+            }
+            $uA = formatUserMention($pdo, $peerId, $fromId);
+            $aRole = $isSuper ? 'Супер-доступ' : getRoleName($pdo, $peerId, $myPriority);
+            sendMessage($peerId, "📢 ВАЖНОЕ ОБЪЯВЛЕНИЕ\n━━━━━━━━━━━━━━━━━━\n{$txt}\n━━━━━━━━━━━━━━━━━━\n👮 Опубликовал: {$uA} ({$aRole})");
+            return true;
+
+        case 'masskick':
+        case 'massban':
+            $tokens = preg_split('/[\s,]+/u', trim($args));
+            $targets = [];
+            foreach ($tokens as $tok) {
+                $tok = trim($tok);
+                if ($tok === '') continue;
+                $tmp = $tok;
+                $uid = extractTargetUser($pdo, $peerId, [], $tmp);
+                if ($uid && $uid > 0 && !in_array($uid, $targets, true)) {
+                    $targets[] = $uid;
+                }
+                if (count($targets) >= 20) break;
+            }
+            if (empty($targets)) {
+                sendMessage($peerId, "⚠️ Использование: !{$cmd} [ID1 ID2 @user3 ...] (до 20 человек за раз)");
+                return true;
+            }
+            $calls = [];
+            $okList = [];
+            $skipped = 0;
+            $expires = date('Y-m-d H:i:s', time() + 365 * 86400);
+            foreach ($targets as $tid) {
+                $err = canPunish($pdo, $peerId, $fromId, $myPriority, $tid, $isSuper);
+                if ($err !== null) {
+                    $skipped++;
+                    continue;
+                }
+                if ($cmd === 'massban') {
+                    $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type = 'ban'")->execute([$peerId, $tid]);
+                    $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, ?, 'ban', 'Массовая блокировка', 1, ?)")
+                        ->execute([$peerId, $tid, $fromId, $expires]);
+                } else {
+                    $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active) VALUES (?, ?, ?, 'kick', 'Массовое исключение', 0)")
+                        ->execute([$peerId, $tid, $fromId]);
+                }
+                if ($peerId > 2000000000) {
+                    $calls[] = ['method' => 'messages.removeChatUser', 'params' => ['chat_id' => $peerId - 2000000000, 'member_id' => $tid]];
+                }
+                $okList[] = $tid;
+            }
+            if (!empty($calls)) vkApiMulti($calls, 10);
+            $uA = formatUserMention($pdo, $peerId, $fromId);
+            $actTitle = ($cmd === 'massban') ? "🔨 Массовая блокировка" : "👢 Массовое исключение";
+            sendMessage($peerId, "{$actTitle} завершена\n👮 Выполнил: {$uA}\n✅ Обработано: " . count($okList) . " чел.\n⏭ Пропущено (защита/роль): {$skipped} чел.");
+            sendToLogChat($pdo, "Беседа {$peerId}: {$uA} выполнил {$cmd} (" . count($okList) . " чел.)");
+            return true;
+
+        case 'backup':
+            $c = $ctx['chat'];
+            $roles = getChatRoles($pdo, $peerId);
+            $wl = getLocalWhitelist($pdo, $peerId);
+            $flt = getChatFilters($pdo, $peerId);
+            $trgs = getChatTriggers($pdo, $peerId);
+
+            $roleLines = [];
+            foreach ($roles as $p => $rn) $roleLines[] = "{$p}: {$rn}";
+
+            $bText = "💾 БЭКАП НАСТРОЕК БЕСЕДЫ «{$c['title']}» (ID: {$peerId})\n"
+                   . "📅 Дата: " . date('d.m.Y H:i') . " МСК\n"
+                   . "━━━━━━━━━━━━━━━━━━\n"
+                   . "🎮 Игры: " . ((int)$c['games_enabled'] ? 'Вкл' : 'Выкл')
+                   . " | 🤖 Автомод: " . ((int)$c['automod_enabled'] ? 'Вкл' : 'Выкл') . "\n"
+                   . "🌊 Антифлуд: " . ((int)$c['antiflood_enabled'] ? 'Вкл' : 'Выкл')
+                   . " | 🛡 Анти-слив: " . ((int)$c['antidrain_enabled'] ? 'Вкл' : 'Выкл') . "\n"
+                   . "🚨 Анти-рейд: " . ((int)$c['antiraid_enabled'] ? 'Вкл' : 'Выкл')
+                   . " | 🔡 Анти-капс: " . ((int)$c['anticaps_enabled'] ? 'Вкл' : 'Выкл') . "\n"
+                   . "🎭 Анти-стикер: " . ((int)$c['antisticker_enabled'] ? 'Вкл' : 'Выкл')
+                   . " | 🐢 Слоумод: " . (int)$c['slowmode_sec'] . " сек.\n\n"
+                   . "🛡 Роли: " . implode(', ', $roleLines) . "\n"
+                   . "🔗 Локальный Whitelist (" . count($wl) . "): " . (empty($wl) ? 'пуст' : implode(', ', $wl)) . "\n"
+                   . "🚫 Фильтр слов (" . count($flt) . "): " . (empty($flt) ? 'пуст' : implode(', ', $flt)) . "\n"
+                   . "⚡ Триггеры (" . count($trgs) . "): " . (empty($trgs) ? 'нет' : implode(', ', array_keys($trgs))) . "\n\n"
+                   . "📜 Правила: " . ($c['rules_text'] ?: 'стандартные') . "\n"
+                   . "👋 Приветствие: " . ($c['welcome_text'] ?: 'не задано');
+
+            $dmRes = sendMessage($fromId, $bText);
+            if (!empty($dmRes['response'])) {
+                sendMessage($peerId, "💾 Полный бэкап настроек беседы отправлен вам в личные сообщения!");
+            } else {
+                sendMessage($peerId, $bText);
+            }
+            return true;
+
+        case 'transferowner':
+            $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
+            if (!$targetId || $targetId === $fromId) {
+                sendMessage($peerId, "⚠️ Использование: !передать [ID/упоминание]\nПередаёт статус Владельца (100) выбранному участнику, а вас переводит в Главные администраторы (80).");
+                return true;
+            }
+            ensureUserAndMember($pdo, $peerId, $targetId);
+            $pdo->prepare("UPDATE bot_chats SET owner_vk_id = ? WHERE peer_id = ?")->execute([$targetId, $peerId]);
+            $pdo->prepare("UPDATE bot_chat_members SET role_priority = 100 WHERE peer_id = ? AND vk_id = ?")->execute([$peerId, $targetId]);
+            if (!$isSuper) {
+                $pdo->prepare("UPDATE bot_chat_members SET role_priority = 80 WHERE peer_id = ? AND vk_id = ?")->execute([$peerId, $fromId]);
+            }
+            $uNew = formatUserMention($pdo, $peerId, $targetId);
+            $uOld = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "👑 Владение беседой передано!\n👤 Новый владелец (100): {$uNew}\n🛡 Предыдущий владелец: {$uOld}");
+            sendToLogChat($pdo, "Беседа {$peerId}: {$uOld} передал владение беседой -> {$uNew}");
+            return true;
+
+        case 'disablecmd':
+        case 'enablecmd':
+            $rawC = mb_strtolower(trim($args));
+            if ($rawC === '') {
+                sendMessage($peerId, "⚠️ Использование: !запретить [команда] | !разрешить [команда]\nПример: !запретить казино");
+                return true;
+            }
+            $targetCmd = resolveCanonicalCommand(ltrim($rawC, '!/.+-'));
+            if (in_array($targetCmd, ['enablecmd', 'disablecmd', 'settings', 'setup', 'help'], true)) {
+                sendMessage($peerId, "⛔ Эту системную команду нельзя отключить.");
+                return true;
+            }
+            if ($cmd === 'disablecmd') {
+                $pdo->prepare("REPLACE INTO bot_cmd_permissions (peer_id, cmd_name, min_priority) VALUES (?, ?, 101)")->execute([$peerId, $targetCmd]);
+                cacheDel("cmdp_{$peerId}");
+                sendMessage($peerId, "🔒 Команда «{$targetCmd}» полностью отключена в этой беседе.\nВернуть: !разрешить {$targetCmd}");
+            } else {
+                $pdo->prepare("DELETE FROM bot_cmd_permissions WHERE peer_id = ? AND cmd_name = ?")->execute([$peerId, $targetCmd]);
+                cacheDel("cmdp_{$peerId}");
+                sendMessage($peerId, "🔓 Команда «{$targetCmd}» снова включена (стандартный приоритет).");
+            }
+            return true;
+
+        case 'resetsettings':
+            $pdo->prepare("UPDATE bot_chats SET games_enabled = 1, silence_until = NULL, automod_enabled = 0, antiflood_enabled = 0, antidrain_enabled = 0, antiraid_enabled = 0, anticaps_enabled = 0, antisticker_enabled = 0, slowmode_sec = 0, mentions_enabled = 1 WHERE peer_id = ?")->execute([$peerId]);
+            $pdo->prepare("DELETE FROM bot_cmd_permissions WHERE peer_id = ?")->execute([$peerId]);
+            cacheDel("cmdp_{$peerId}");
+            sendMessage($peerId, "🔄 Все режимы защиты и кастомные права команд беседы сброшены к стандартным настройкам.");
+            return true;
+
+        case 'sysreset':
+            $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
+            if (!$targetId) { sendMessage($peerId, "⚠️ Использование: /sysreset [ID/ссылка]"); return true; }
+            if (isMainOwner($targetId)) { sendMessage($peerId, "⛔ Нельзя сбросить профиль Создателя бота."); return true; }
+            $pdo->prepare("UPDATE bot_users SET balance = 1500, bank_balance = 0, clan_id = NULL, reputation = 0, total_messages = 0, total_chars = 0, total_stickers = 0 WHERE vk_id = ?")->execute([$targetId]);
+            $pdo->prepare("UPDATE bot_chat_members SET messages_count = 0, chars_count = 0, stickers_count = 0 WHERE vk_id = ?")->execute([$targetId]);
+            $uT = formatUserMention($pdo, $peerId, $targetId);
+            $uA = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "🧹 [SYSRESET] Полный сброс экономики и статистики выполнен\n👤 Пользователь: {$uT}\n👑 Выполнил: {$uA}");
+            return true;
+
+        case 'sysunmute':
+            $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
+            if (!$targetId) { sendMessage($peerId, "⚠️ Использование: /sysunmute [ID/ссылка]"); return true; }
+            $stmt = $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE target_vk_id = ? AND type = 'mute' AND is_active = 1");
+            $stmt->execute([$targetId]);
+            $uT = formatUserMention($pdo, $peerId, $targetId);
+            $uA = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "🔊 [SYSUNMUTE] Все муты сняты по всем беседам\n👤 Пользователь: {$uT}\n👑 Снял: {$uA}\n📋 Снято мутов: " . $stmt->rowCount());
+            return true;
+
+        case 'sysleave':
+            $tp = (int)trim($args);
+            if ($tp <= 0) $tp = $peerId;
+            elseif ($tp < 2000000000) $tp += 2000000000;
+            $pdo->prepare("DELETE FROM bot_chats WHERE peer_id = ?")->execute([$tp]);
+            $pdo->prepare("DELETE FROM bot_timers WHERE peer_id = ?")->execute([$tp]);
+            sendMessage($peerId, "🚪 Беседа {$tp} удалена из базы бота и исключена из всех рассылок/таймеров.");
+            return true;
+
+        case 'clearcache':
+            $cnt = cacheClearAll();
+            sendMessage($peerId, "⚡ Локальный кэш очищен! Удалено временных файлов: {$cnt}.");
             return true;
 
     }

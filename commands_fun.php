@@ -83,7 +83,8 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 $txt = "⚡ Администратор (60+) и Гл. Админ (80+):\n\n"
                      . "Приоритет ≥ 60:\n"
                      . "• !модер / !grole / !temprole [ID] [роль] [дни]\n"
-                     . "• !gban / !gunban [ID] | !удалить (пересланное)\n"
+                     . "• !gban / !gunban [ID] | !маскик / !массбан [ID...] | !анонс [текст]\n"
+                     . "• !удалить (пересланное)\n"
                      . "• !gm [ID] / !removegm [ID] / !gms — иммунитет\n"
                      . "• !history [ID] / !reports / !getreport\n\n"
                      . "Приоритет ≥ 80:\n"
@@ -98,11 +99,12 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 $txt = "👑 Владелец беседы (100) и Супер-доступ (/addws):\n\n"
                      . "• !setup / !settings / !gsettings / !gedit\n"
                      . "• !антислив (!antidrain) | !антирейд (!antiraid) — защита чата\n"
-                     . "• !automod / !антифлуд / !антикапс / !games / !уведы\n"
+                     . "• !automod / !антифлуд / !антикапс / !антистикер / !games / !уведы\n"
+                     . "• !бэкап / !передать [ID] / !запретить / !разрешить / !очиститьнастройки\n"
                      . "• !unity / !unites / !createunity / !addunity / !editunity / !removeunity / !deleteunity\n"
                      . "• !sync / !spec / !gspec / !wipe / !migration / !clone [ID]\n"
                      . "• !editcmd / !geditcmd / !owner [ID] / !никэмодзи\n"
-                     . "• Супер-доступ: /sysban, /sysunban, /syskick, /sysrole, /sysnick, /giverub, /givesoo, /broadcast, /botban, /botunban, /sysstats, /sysaudit, /syslist, /maintenance, !addws, !vip, !setlog, !zovvv, !gzovg, !gtimeuvedg, !listunities, !listen, !chatlist, !userchats, !ahistory, !checkban";
+                     . "• Супер-доступ: /sysban, /sysunban, /syskick, /sysrole, /sysnick, /giverub, /givesoo, /broadcast, /botban, /botunban, /sysstats, /sysaudit, /sysreset, /sysunmute, /sysleave, /clearcache, /syslist, /maintenance, !addws, !vip, !setlog, !zovvv, !gzovg, !gtimeuvedg, !listunities, !listen, !chatlist, !userchats, !ahistory, !checkban";
             } else {
                 $txt = "📋 Справка по командам RASE RUSSIA BOT:\n"
                      . "Префиксы: ! / . + - (на русском и английском)\n\n"

@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS `bot_chats` (
     `antidrain_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `antiraid_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `anticaps_enabled` TINYINT(1) NOT NULL DEFAULT 0,
+    `antisticker_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `slowmode_sec` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
     `mentions_enabled` TINYINT(1) NOT NULL DEFAULT 1,
     `listen_target_vk_id` BIGINT UNSIGNED DEFAULT NULL,
@@ -370,6 +371,9 @@ BEGIN
 
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='anticaps_enabled') THEN
         ALTER TABLE `bot_chats` ADD COLUMN `anticaps_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `antiraid_enabled`;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='antisticker_enabled') THEN
+        ALTER TABLE `bot_chats` ADD COLUMN `antisticker_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `anticaps_enabled`;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chat_members' AND COLUMN_NAME='invited_by') THEN
         ALTER TABLE `bot_chat_members` ADD COLUMN `invited_by` BIGINT UNSIGNED DEFAULT NULL AFTER `mention_opt_in`;
