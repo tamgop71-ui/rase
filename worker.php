@@ -13,6 +13,7 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/helpers.php';
 
 file_put_contents('php://stderr', "[WORKER] Background daemon started." . PHP_EOL);
+try { syncSysBanCache(getDB()); } catch (Throwable $ignore) {}
 
 function flushStatQueue(PDO $pdo): void {
     $qFile = '/tmp/bot_stat_queue.jsonl';
@@ -125,6 +126,7 @@ while (true) {
         // 3. Раз в минуту: таймеры (!timeuved / !gtimeuvedg) и деактивация истёкших наказаний
         if ($tick % 12 === 0) {
             $pdo->query("UPDATE bot_punishments SET is_active = 0 WHERE is_active = 1 AND expires_at IS NOT NULL AND expires_at <= NOW()");
+            syncSysBanCache($pdo);
 
             $timers = $pdo->query("SELECT * FROM bot_timers WHERE is_active = 1")->fetchAll();
             $now = time();

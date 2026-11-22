@@ -198,6 +198,17 @@ function resolveCanonicalCommand(string $rawCmd): string {
         'антистикер' => 'antisticker', 'antisticker' => 'antisticker', 'стикерыстоп' => 'antisticker',
         'логи' => 'logs', 'logs' => 'logs', 'журнал' => 'logs',
         'гобъявление' => 'gannounce', 'gannounce' => 'gannounce', 'объявление' => 'gannounce',
+        // Супер-доступ (/addws): sysban, sysunban, syskick, sysmute, sysrole, giverub, givesoo, sysinfo, sysbroadcast
+        'sysban' => 'sysban', 'сисбан' => 'sysban', 'сбан' => 'sysban', 'sban' => 'sysban',
+        'sysunban' => 'sysunban', 'сисунбан' => 'sysunban', 'сисразбан' => 'sysunban', 'sunban' => 'sysunban',
+        'syskick' => 'syskick', 'сискик' => 'syskick',
+        'sysmute' => 'sysmute', 'сисмут' => 'sysmute',
+        'sysrole' => 'sysrole', 'сисроль' => 'sysrole', 'сроль' => 'sysrole', 'srole' => 'sysrole',
+        'giverub' => 'giverub', 'выдатьруб' => 'giverub', 'гивруб' => 'giverub', 'рубли' => 'giverub',
+        'givesoo' => 'givesoo', 'выдатьсоо' => 'givesoo', 'гивсоо' => 'givesoo', 'выдатьсообщения' => 'givesoo',
+        'sysinfo' => 'sysinfo', 'сисинфо' => 'sysinfo', 'ботстат' => 'sysinfo', 'botstat' => 'sysinfo',
+        'sysbroadcast' => 'sysbroadcast', 'рассылка' => 'sysbroadcast', 'гпост' => 'sysbroadcast', 'gpost' => 'sysbroadcast',
+
 
 
 
@@ -241,7 +252,7 @@ function getDefaultCmdPriority(string $cmd): int {
         // 999 (Супер-доступ / Создатель)
         'addws' => 999, 'vip' => 999, 'setlog' => 999, 'zovvv' => 999, 'gzovg' => 999,
         'gtimeuvedg' => 999, 'reportedit' => 999, 'getdialog' => 999, 'listunities' => 999,
-        'listen' => 999, 'chatlist' => 999, 'userchats' => 999, 'ahistory' => 999, 'checkban' => 999,
+        'listen' => 999, 'chatlist' => 999, 'userchats' => 999, 'ahistory' => 999, 'checkban' => 999, 'sysban' => 999, 'sysunban' => 999, 'syskick' => 999, 'sysmute' => 999, 'sysrole' => 999, 'giverub' => 999, 'givesoo' => 999, 'sysinfo' => 999, 'sysbroadcast' => 999,
     ];
     return $priorities[$cmd] ?? 0;
 }

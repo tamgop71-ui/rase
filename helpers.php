@@ -267,7 +267,7 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
         'vk_id'           => $vkId,
         'nickname'        => $row['nickname'] ?? null,
         'emoji'           => $row['emoji'] ?? null,
-        'role_priority'   => $isSuperFinal ? 100 : (int)($row['role_priority'] ?? 0),
+        'role_priority'   => isset($row['role_priority']) ? (int)$row['role_priority'] : ($isSuperFinal ? 100 : 0),
         'gm_granted_by'   => $row['gm_granted_by'] ?? null,
         'gm_min_priority' => (int)($row['gm_min_priority'] ?? 0),
         'mention_opt_in'  => (int)($row['mention_opt_in'] ?? 1),
@@ -696,4 +696,35 @@ function checkAntiDrain(PDO $pdo, int $peerId, int $actorId, int $actorPriority,
         return true;
     }
     return false;
+}
+
+
+/**
+ * Быстрый локальный кэш глобальных системных банов (/sysban) в /tmp (0 SQL-запросов)
+ */
+function setSysBanCache(int $vkId, ?string $reason): void {
+    $file = '/tmp/sysban_index.json';
+    $data = is_file($file) ? (json_decode((string)@file_get_contents($file), true) ?: []) : [];
+    if ($reason === null) {
+        unset($data[(string)$vkId]);
+    } else {
+        $data[(string)$vkId] = $reason;
+    }
+    @file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX);
+}
+
+function getSysBanFromCache(int $vkId): ?string {
+    $file = '/tmp/sysban_index.json';
+    if (!is_file($file)) return null;
+    $data = json_decode((string)@file_get_contents($file), true);
+    return isset($data[(string)$vkId]) ? (string)$data[(string)$vkId] : null;
+}
+
+function syncSysBanCache(PDO $pdo): void {
+    $rows = $pdo->query("SELECT target_vk_id, reason FROM bot_punishments WHERE peer_id = 0 AND type = 'gban' AND is_active = 1 AND (expires_at IS NULL OR expires_at > NOW())")->fetchAll();
+    $map = [];
+    foreach ($rows as $r) {
+        $map[(string)$r['target_vk_id']] = (string)$r['reason'];
+    }
+    @file_put_contents('/tmp/sysban_index.json', json_encode($map, JSON_UNESCAPED_UNICODE), LOCK_EX);
 }
