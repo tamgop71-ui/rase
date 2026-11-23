@@ -102,7 +102,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 $txt = "👑 Владелец беседы (100) и Супер-доступ (/addws):\n\n"
                      . "• !setup / !settings / !gsettings / !gedit\n"
                      . "• !антислив (!antidrain) | !антирейд (!antiraid) — защита чата\n"
-                     . "• !automod / !антифлуд / !антикапс / !антистикер / !автосинк / !games\n"
+                     . "• !automod / !антифлуд / !антикапс / !антистикер / !автосинк / !иивкл / !games\n"
                      . "• !бэкап / !передать [ID] / !запретить / !разрешить / !очиститьнастройки\n"
                      . "• !unity / !unites / !createunity / !addunity / !editunity / !removeunity / !deleteunity\n"
                      . "• !sync / !spec / !gspec / !wipe / !migration / !clone [ID]\n"
@@ -112,6 +112,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 $txt = "📋 Справка по командам RASE RUSSIA BOT:\n"
                      . "Префиксы: ! / . + - (на русском и английском)\n\n"
                      . "• !пинг / !статус — скорость отклика и статус бота\n"
+                     . "• !ии [вопрос] (!ai) — задать любой вопрос нейросети\n"
                      . "• !напомни [время] [текст] — напоминалка (пример: !напомни 2ч обзвон)\n"
                      . "• !напомни лс [время] [текст] — личное напоминание в ЛС\n"
                      . "• !напоминания — список ваших активных напоминаний\n"
@@ -1127,6 +1128,51 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 ['label' => "🎉 Участвовать (#{$gwId})", 'payload' => ['cmd' => "!giveaway join {$gwId}"], 'color' => 'positive']
             ]]);
             sendMessage($peerId, "🎉 РОЗЫГРЫШ #{$gwId}!\n━━━━━━━━━━━━━━━━━━\n💰 Призовой фонд: " . formatMoney($prize) . "\n🏆 Победителей: {$winnersCnt}\n⏳ Итоги: " . date('d.m.Y в H:i', $endsTs) . " МСК\n👮 Организатор: {$uA}\n\n👇 Нажмите кнопку ниже, чтобы принять участие!", $kb);
+            return true;
+
+
+        case 'ai':
+            if ((int)($ctx['chat']['ai_enabled'] ?? 1) === 0 && !$isSuper) {
+                sendMessage($peerId, "🤖 Команда !ии отключена владельцем в этой беседе (!иивкл).");
+                return true;
+            }
+            $question = trim($args);
+            $replyText = trim((string)($msg['reply_message']['text'] ?? ($msg['fwd_messages'][0]['text'] ?? '')));
+            if ($question === '' && $replyText !== '') {
+                $question = 'Ответь на это сообщение или кратко объясни его суть.';
+            }
+            if ($question === '') {
+                sendMessage($peerId, "🤖 Задайте любой вопрос нейросети!\nПример: !ии как быстро поднять онлайн в беседе?\n💡 Также можно ответить командой !ии на чужое сообщение.");
+                return true;
+            }
+            if (mb_strlen($question) > 700) {
+                sendMessage($peerId, "⚠️ Вопрос слишком длинный (максимум 700 символов).");
+                return true;
+            }
+
+            // Кулдаун на запросы к ИИ через /tmp (0 SQL-запросов)
+            if (!$isSuper) {
+                $cdSec = ((int)$ctx['global']['is_vip'] === 1 || $myPriority >= 40) ? 6 : 15;
+                $cdFile = "/tmp/ai_cd_{$fromId}.txt";
+                if (is_file($cdFile)) {
+                    $diff = time() - (int)@file_get_contents($cdFile);
+                    if ($diff < $cdSec) {
+                        $rem = $cdSec - $diff;
+                        sendMessage($peerId, "⏳ Подождите {$rem} сек. перед следующим вопросом к ИИ.");
+                        return true;
+                    }
+                }
+                @file_put_contents($cdFile, (string)time());
+            }
+
+            require_once __DIR__ . '/ai_client.php';
+            $answer = askAiAssistant($question, $replyText);
+            $uM = formatUserMention($pdo, $peerId, $fromId);
+            if ($answer === null || $answer === '') {
+                sendMessage($peerId, "⚠️ {$uM}, нейросеть сейчас перегружена и не успела ответить. Попробуйте повторить вопрос через пару секунд.");
+                return true;
+            }
+            sendMessage($peerId, "🤖 Ответ ИИ для {$uM}:\n\n{$answer}", null, ['disable_mentions' => 1]);
             return true;
 
     }

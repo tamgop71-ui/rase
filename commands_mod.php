@@ -914,7 +914,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $sub = mb_strtolower(trim($args));
             $peers = $isUnity ? getUnityPeers($pdo, $peerId) : [$peerId];
 
-            if (in_array($sub, ['games', 'silence', 'mentions', 'automod', 'antiflood', 'antidrain', 'antiraid', 'anticaps', 'antisticker', 'autosync'], true)) {
+            if (in_array($sub, ['games', 'silence', 'mentions', 'automod', 'antiflood', 'antidrain', 'antiraid', 'anticaps', 'antisticker', 'autosync', 'ai'], true)) {
                 foreach ($peers as $pId) {
                     if ($sub === 'games') $pdo->prepare("UPDATE bot_chats SET games_enabled = 1 - games_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'automod') $pdo->prepare("UPDATE bot_chats SET automod_enabled = 1 - automod_enabled WHERE peer_id = ?")->execute([$pId]);
@@ -924,6 +924,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                     elseif ($sub === 'anticaps') $pdo->prepare("UPDATE bot_chats SET anticaps_enabled = 1 - anticaps_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'antisticker') $pdo->prepare("UPDATE bot_chats SET antisticker_enabled = 1 - antisticker_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'autosync') $pdo->prepare("UPDATE bot_chats SET autosync_enabled = 1 - autosync_enabled WHERE peer_id = ?")->execute([$pId]);
+                    elseif ($sub === 'ai') $pdo->prepare("UPDATE bot_chats SET ai_enabled = 1 - ai_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'mentions') $pdo->prepare("UPDATE bot_chats SET mentions_enabled = 1 - mentions_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'silence') {
                         $stmtS = $pdo->prepare("SELECT silence_until FROM bot_chats WHERE peer_id = ?");
@@ -945,6 +946,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $cS = (int)($c['anticaps_enabled'] ?? 0) ? '✅' : '❌';
             $stS = (int)($c['antisticker_enabled'] ?? 0) ? '✅' : '❌';
             $asS = (int)($c['autosync_enabled'] ?? 1) ? '✅' : '❌';
+            $aiS = (int)($c['ai_enabled'] ?? 1) ? '✅' : '❌';
             $mS = (int)$c['mentions_enabled'] ? '✅' : '❌';
             $sS = (!empty($c['silence_until']) && strtotime($c['silence_until']) > time()) ? '✅' : '❌';
             $pCmd = $isUnity ? '!gsettings' : '!settings';
@@ -967,6 +969,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 ],
                 [
                     ['label' => "🔄 Автосинк {$asS}", 'payload' => ['cmd' => "{$pCmd} autosync"], 'color' => 'primary'],
+                    ['label' => "🧠 ИИ {$aiS}", 'payload' => ['cmd' => "{$pCmd} ai"], 'color' => 'positive'],
                     ['label' => "🔔 Упоминания {$mS}", 'payload' => ['cmd' => "{$pCmd} mentions"], 'color' => 'secondary']
                 ]
             ]);
@@ -2419,6 +2422,17 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $hm = sprintf('%02d:%02d', (int)$m[1], (int)$m[2]);
             $pdo->prepare("UPDATE bot_chats SET daily_report_time = ? WHERE peer_id = ?")->execute([$hm, $peerId]);
             sendMessage($peerId, "✅ Ежедневный авто-отчёт настроен! Каждый день в {$hm} МСК бот будет публиковать суточную сводку беседы.");
+            return true;
+
+
+        case 'aitoggle':
+            $pdo->prepare("UPDATE bot_chats SET ai_enabled = 1 - ai_enabled WHERE peer_id = ?")->execute([$peerId]);
+            $stAi = $pdo->prepare("SELECT ai_enabled FROM bot_chats WHERE peer_id = ?");
+            $stAi->execute([$peerId]);
+            $st = (int)$stAi->fetchColumn();
+            sendMessage($peerId, $st
+                ? "🧠 Команда !ии включена в этой беседе!"
+                : "🧠 Команда !ии отключена в этой беседе.");
             return true;
 
     }

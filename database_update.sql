@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS `bot_chats` (
     `anticaps_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `antisticker_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `autosync_enabled` TINYINT(1) NOT NULL DEFAULT 1,
+    `ai_enabled` TINYINT(1) NOT NULL DEFAULT 1,
     `daily_report_time` VARCHAR(5) DEFAULT NULL,
     `last_daily_report_date` DATE DEFAULT NULL,
     `slowmode_sec` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
@@ -402,6 +403,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='autosync_enabled') THEN
         ALTER TABLE `bot_chats` ADD COLUMN `autosync_enabled` TINYINT(1) NOT NULL DEFAULT 1 AFTER `antisticker_enabled`;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='ai_enabled') THEN
+        ALTER TABLE `bot_chats` ADD COLUMN `ai_enabled` TINYINT(1) NOT NULL DEFAULT 1 AFTER `autosync_enabled`;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='daily_report_time') THEN
         ALTER TABLE `bot_chats` ADD COLUMN `daily_report_time` VARCHAR(5) DEFAULT NULL AFTER `autosync_enabled`;

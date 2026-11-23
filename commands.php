@@ -228,6 +228,9 @@ function getCommandAliasMap(): array {
         'отчёт' => 'daystats', 'отчет' => 'daystats', 'daystats' => 'daystats', 'сводка' => 'daystats',
         'автоотчёт' => 'dailyreport', 'автоотчет' => 'dailyreport', 'dailyreport' => 'dailyreport',
         'автосинк' => 'autosync', 'autosync' => 'autosync',
+        'ии' => 'ai', 'ai' => 'ai', 'нейросеть' => 'ai', 'gpt' => 'ai', 'спроси' => 'ai',
+        'иивкл' => 'aitoggle', 'aitoggle' => 'aitoggle',
+
 
 
 
@@ -274,7 +277,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'settings' => 100, 'gsettings' => 100, 'setup' => 100, 'unity' => 100, 'unites' => 100,
         'addunity' => 100, 'createunity' => 100, 'editunity' => 100, 'removeunity' => 100,
         'deleteunity' => 100, 'sync' => 100, 'spec' => 100, 'gspec' => 100, 'wipe' => 100,
-        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100, 'antidrain' => 100, 'antiraid' => 100, 'anticaps' => 100, 'antisticker' => 100, 'autosync' => 100, 'clonechat' => 100, 'backup' => 100, 'transferowner' => 100, 'disablecmd' => 100, 'enablecmd' => 100, 'resetsettings' => 100,
+        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100, 'antidrain' => 100, 'antiraid' => 100, 'anticaps' => 100, 'antisticker' => 100, 'autosync' => 100, 'aitoggle' => 100, 'clonechat' => 100, 'backup' => 100, 'transferowner' => 100, 'disablecmd' => 100, 'enablecmd' => 100, 'resetsettings' => 100,
         'editcmd' => 100, 'geditcmd' => 100, 'gedit' => 100, 'owner' => 100,
 
         // 999 (Супер-доступ / Создатель)
@@ -346,7 +349,7 @@ function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int
     }
 
     // Ленивая подгрузка: загружаем ТОЛЬКО тот модуль (fun или mod), который нужен для этой команды
-    static $funSet = ['admins' => true, 'afk' => true, 'atop' => true, 'ball' => true, 'bank' => true, 'beer' => true, 'bonus' => true, 'case' => true, 'casino' => true, 'choose' => true, 'citizenship' => true, 'clan' => true, 'clans' => true, 'coin' => true, 'countries' => true, 'deposit' => true, 'divorce' => true, 'duel' => true, 'emoji' => true, 'enick' => true, 'giveaway' => true, 'help' => true, 'hug' => true, 'iznas' => true, 'kiss' => true, 'marriages' => true, 'marry' => true, 'mention_off' => true, 'mention_on' => true, 'mentions' => true, 'minet' => true, 'mycountry' => true, 'online' => true, 'pay' => true, 'ping' => true, 'poll' => true, 'profile' => true, 'promo' => true, 'quests' => true, 'remind' => true, 'reminders' => true, 'rep' => true, 'rob' => true, 'roles' => true, 'roll' => true, 'roulette' => true, 'rules' => true, 'shop' => true, 'slots' => true, 'start' => true, 'stickers' => true, 'thereid' => true, 'top' => true, 'try' => true, 'withdraw' => true, 'work' => true];
+    static $funSet = ['admins' => true, 'afk' => true, 'ai' => true, 'atop' => true, 'ball' => true, 'bank' => true, 'beer' => true, 'bonus' => true, 'case' => true, 'casino' => true, 'choose' => true, 'citizenship' => true, 'clan' => true, 'clans' => true, 'coin' => true, 'countries' => true, 'deposit' => true, 'divorce' => true, 'duel' => true, 'emoji' => true, 'enick' => true, 'giveaway' => true, 'help' => true, 'hug' => true, 'iznas' => true, 'kiss' => true, 'marriages' => true, 'marry' => true, 'mention_off' => true, 'mention_on' => true, 'mentions' => true, 'minet' => true, 'mycountry' => true, 'online' => true, 'pay' => true, 'ping' => true, 'poll' => true, 'profile' => true, 'promo' => true, 'quests' => true, 'remind' => true, 'reminders' => true, 'rep' => true, 'rob' => true, 'roles' => true, 'roll' => true, 'roulette' => true, 'rules' => true, 'shop' => true, 'slots' => true, 'start' => true, 'stickers' => true, 'thereid' => true, 'top' => true, 'try' => true, 'withdraw' => true, 'work' => true];
     if (isset($funSet[$cmd])) {
         require_once __DIR__ . '/commands_fun.php';
         if (handleFunAndGeneralCommands($pdo, $cmd, $args, $peerId, $fromId, $ctx, $msg, $myPriority, $isSuper)) {
