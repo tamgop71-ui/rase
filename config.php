@@ -135,7 +135,7 @@ function cacheDel(string $key): void {
  */
 function cacheClearAll(): int {
     $removed = 0;
-    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/st_*.txt', '/tmp/ai_cd_*.txt', '/tmp/rep_*.txt', '/tmp/db_hb_*.txt'];
+    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/st_*.txt', '/tmp/ai_cd_*.txt', '/tmp/q_cd_*.txt', '/tmp/quote_*.jpg', '/tmp/rep_*.txt', '/tmp/db_hb_*.txt'];
     foreach ($patterns as $pat) {
         $list = glob($pat);
         if (!$list) continue;
@@ -148,7 +148,7 @@ function cacheClearAll(): int {
 
 function cleanupTmpCache(): void {
     $now = time();
-    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/ai_cd_*.txt', '/tmp/rep_*.txt', '/tmp/db_hb_*.txt'];
+    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/ai_cd_*.txt', '/tmp/q_cd_*.txt', '/tmp/quote_*.jpg', '/tmp/rep_*.txt', '/tmp/db_hb_*.txt'];
     foreach ($patterns as $pat) {
         $list = glob($pat);
         if (!$list) continue;

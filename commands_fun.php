@@ -113,6 +113,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "Префиксы: ! / . + - (на русском и английском)\n\n"
                      . "• !пинг / !статус — скорость отклика и статус бота\n"
                      . "• !ии [вопрос] (!ai) — задать любой вопрос нейросети\n"
+                     . "• !цитата [текст] (!quote) — красивая картинка-цитата (можно ответом)\n"
                      . "• !напомни [время] [текст] — напоминалка (пример: !напомни 2ч обзвон)\n"
                      . "• !напомни лс [время] [текст] — личное напоминание в ЛС\n"
                      . "• !напоминания — список ваших активных напоминаний\n"
@@ -1173,6 +1174,77 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 return true;
             }
             sendMessage($peerId, "🤖 Ответ ИИ для {$uM}:\n\n{$answer}", null, ['disable_mentions' => 1]);
+            return true;
+
+
+        case 'quote':
+            $quoteText = trim($args);
+            $authorId = $fromId;
+            $quoteTs = time();
+
+            // Если команда вызвана ответом или с пересланным сообщением — берём автора и дату того сообщения
+            if (!empty($msg['reply_message'])) {
+                $rMsg = $msg['reply_message'];
+                if ((int)($rMsg['from_id'] ?? 0) > 0) $authorId = (int)$rMsg['from_id'];
+                if ($quoteText === '') $quoteText = trim((string)($rMsg['text'] ?? ''));
+                if (!empty($rMsg['date'])) $quoteTs = (int)$rMsg['date'];
+            } elseif (!empty($msg['fwd_messages'][0])) {
+                $fMsg = $msg['fwd_messages'][0];
+                if ((int)($fMsg['from_id'] ?? 0) > 0) $authorId = (int)$fMsg['from_id'];
+                if ($quoteText === '') $quoteText = trim((string)($fMsg['text'] ?? ''));
+                if (!empty($fMsg['date'])) $quoteTs = (int)$fMsg['date'];
+            }
+
+            if ($quoteText === '') {
+                sendMessage($peerId, "🖼 Использование:\n• !цитата [ваш текст] — цитата от вашего имени\n• Ответьте на чужое сообщение командой !цитата — цитата с его аватаркой и текстом");
+                return true;
+            }
+
+            // Кулдаун 5 сек через /tmp (0 SQL-запросов)
+            if (!$isSuper) {
+                $cdFile = "/tmp/q_cd_{$fromId}.txt";
+                if (is_file($cdFile)) {
+                    $diff = time() - (int)@file_get_contents($cdFile);
+                    if ($diff < 5) {
+                        sendMessage($peerId, "⏳ Подождите " . (5 - $diff) . " сек. перед созданием следующей цитаты.");
+                        return true;
+                    }
+                }
+                @file_put_contents($cdFile, (string)time());
+            }
+
+            // Получаем имя и аватарку автора из VK API (с кэшем на 10 мин)
+            $uCacheKey = "qprof_{$authorId}";
+            $uProf = cacheGet($uCacheKey, 600);
+            if (!is_array($uProf)) {
+                $vkRes = vkApi('users.get', ['user_ids' => $authorId, 'fields' => 'photo_400_orig,photo_200']);
+                $uData = $vkRes['response'][0] ?? [];
+                $uProf = [
+                    'name'   => trim(($uData['first_name'] ?? 'Игрок') . ' ' . ($uData['last_name'] ?? '')),
+                    'avatar' => (string)($uData['photo_400_orig'] ?? ($uData['photo_200'] ?? '')),
+                ];
+                cacheSet($uCacheKey, $uProf);
+            }
+
+            $authorName = $uProf['name'] !== '' ? $uProf['name'] : "ID {$authorId}";
+            $avatarUrl  = $uProf['avatar'] !== '' ? $uProf['avatar'] : null;
+
+            require_once __DIR__ . '/quote_generator.php';
+            $imgPath = generateQuoteImage($quoteText, $authorName, $avatarUrl, $quoteTs);
+            if ($imgPath === null) {
+                sendMessage($peerId, "⚠️ Не удалось сгенерировать картинку цитаты. Убедитесь, что контейнер пересобран с новым Dockerfile.");
+                return true;
+            }
+
+            $attachment = uploadPhotoToVkMessage($peerId, $imgPath);
+            @unlink($imgPath);
+
+            if ($attachment === null) {
+                sendMessage($peerId, "⚠️ Не удалось загрузить картинку в ВКонтакте. Попробуйте ещё раз.");
+                return true;
+            }
+
+            sendMessage($peerId, "", null, ['attachment' => $attachment]);
             return true;
 
     }
