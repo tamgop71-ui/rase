@@ -1,9 +1,11 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/inflect.php';
 
 $GLOBALS['_roles_cache']   = [];
 $GLOBALS['_mention_cache'] = [];
+$GLOBALS['_mention_raw_cache'] = [];
 
 function getDefaultRoles(): array {
     return [
@@ -76,6 +78,7 @@ function preloadUsers(PDO $pdo, int $peerId, array $vkIds): void {
             : trim(($row['first_name'] ?? 'Игрок') . ' ' . ($row['last_name'] ?? ''));
         if ($name === '') $name = "ID {$uid}";
         $emoji = !empty($row['emoji']) ? $row['emoji'] . ' ' : '';
+        $GLOBALS['_mention_raw_cache']["{$peerId}:{$uid}"] = ['name' => $name, 'emoji' => $emoji];
         $GLOBALS['_mention_cache']["{$peerId}:{$uid}"] = "[id{$uid}|{$emoji}{$name}]";
     }
 }
@@ -366,6 +369,7 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
     $disp = !empty($member['nickname']) ? $member['nickname'] : trim($global['first_name'] . ' ' . $global['last_name']);
     if ($disp === '') $disp = "ID {$vkId}";
     $em = !empty($member['emoji']) ? $member['emoji'] . ' ' : '';
+    $GLOBALS['_mention_raw_cache']["{$peerId}:{$vkId}"] = ['name' => $disp, 'emoji' => $em];
     $GLOBALS['_mention_cache']["{$peerId}:{$vkId}"] = "[id{$vkId}|{$em}{$disp}]";
 
     return ['global' => $global, 'chat' => $chat, 'member' => $member, 'pending_stats' => $pendingStats];
@@ -419,28 +423,44 @@ function flushPendingStats(PDO $pdo, array &$ctx): void {
     }
 }
 
-function formatUserMention(PDO $pdo, int $peerId, int $vkId): string {
+function formatUserMention(PDO $pdo, int $peerId, int $vkId, string $case = 'nom'): string {
     $key = "{$peerId}:{$vkId}";
-    if (isset($GLOBALS['_mention_cache'][$key])) return $GLOBALS['_mention_cache'][$key];
-
-    $stmt = $pdo->prepare("SELECT u.first_name, u.last_name, m.nickname, m.emoji
-                           FROM bot_users u
-                           LEFT JOIN bot_chat_members m ON m.vk_id = u.vk_id AND m.peer_id = ?
-                           WHERE u.vk_id = ?");
-    $stmt->execute([$peerId, $vkId]);
-    $row = $stmt->fetch();
-
-    if (!$row) {
-        ensureUserAndMember($pdo, $peerId, $vkId);
-        return $GLOBALS['_mention_cache'][$key] ?? "[id{$vkId}|ID {$vkId}]";
+    if ($case === 'nom' && isset($GLOBALS['_mention_cache'][$key])) {
+        return $GLOBALS['_mention_cache'][$key];
     }
 
-    $displayName = !empty($row['nickname'])
-        ? $row['nickname']
-        : trim(($row['first_name'] ?? 'Игрок') . ' ' . ($row['last_name'] ?? ''));
-    if ($displayName === '') $displayName = "ID {$vkId}";
-    $emoji = !empty($row['emoji']) ? $row['emoji'] . ' ' : '';
-    return $GLOBALS['_mention_cache'][$key] = "[id{$vkId}|{$emoji}{$displayName}]";
+    if (!isset($GLOBALS['_mention_raw_cache'][$key])) {
+        $stmt = $pdo->prepare("SELECT u.first_name, u.last_name, m.nickname, m.emoji
+                               FROM bot_users u
+                               LEFT JOIN bot_chat_members m ON m.vk_id = u.vk_id AND m.peer_id = ?
+                               WHERE u.vk_id = ?");
+        $stmt->execute([$peerId, $vkId]);
+        $row = $stmt->fetch();
+
+        if (!$row) {
+            ensureUserAndMember($pdo, $peerId, $vkId);
+        } else {
+            $displayName = !empty($row['nickname'])
+                ? $row['nickname']
+                : trim(($row['first_name'] ?? 'Игрок') . ' ' . ($row['last_name'] ?? ''));
+            if ($displayName === '') $displayName = "ID {$vkId}";
+            $emoji = !empty($row['emoji']) ? $row['emoji'] . ' ' : '';
+            $GLOBALS['_mention_raw_cache'][$key] = ['name' => $displayName, 'emoji' => $emoji];
+            $GLOBALS['_mention_cache'][$key] = "[id{$vkId}|{$emoji}{$displayName}]";
+        }
+    }
+
+    $raw = $GLOBALS['_mention_raw_cache'][$key] ?? null;
+    if ($raw === null) {
+        return "[id{$vkId}|ID {$vkId}]";
+    }
+
+    $name = ($case === 'nom') ? $raw['name'] : inflectRussianName($raw['name'], $case);
+    $mention = "[id{$vkId}|{$raw['emoji']}{$name}]";
+    if ($case === 'nom') {
+        $GLOBALS['_mention_cache'][$key] = $mention;
+    }
+    return $mention;
 }
 
 function parseAmount(string $raw, int $userBalance = 0): ?int {
@@ -656,8 +676,11 @@ function executeApprovedSuperAction(PDO $pdo, array $req, int $approverId): stri
     $reason   = (string)$req['reason'];
 
     $uActor  = formatUserMention($pdo, $peerId, $actorId);
-    $uTarget = formatUserMention($pdo, $peerId, $targetId);
-    $uOwner  = formatUserMention($pdo, $peerId, $approverId);
+    $uTarget    = formatUserMention($pdo, $peerId, $targetId);
+    $uTargetAcc = formatUserMention($pdo, $peerId, $targetId, 'acc');
+    $uTargetDat = formatUserMention($pdo, $peerId, $targetId, 'dat');
+    $uTargetGen = formatUserMention($pdo, $peerId, $targetId, 'gen');
+    $uOwner     = formatUserMention($pdo, $peerId, $approverId);
 
     switch ($act) {
         case 'kick':
@@ -666,7 +689,7 @@ function executeApprovedSuperAction(PDO $pdo, array $req, int $approverId): stri
             if ($peerId > 2000000000) {
                 vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $targetId]);
             }
-            sendMessage($peerId, "👢 Пользователь исключён из беседы (одобрено Создателем)\n👤 Участник: {$uTarget}\n👮 Инициатор: {$uActor}\n👑 Одобрил: {$uOwner}\n📝 Причина: {$reason}");
+            sendMessage($peerId, "👢 {$uActor} исключил(а) {$uTargetAcc} из беседы (одобрено Создателем)\n👑 Одобрил: {$uOwner}\n📝 Причина: {$reason}");
             return "Кик {$uTarget} из беседы {$peerId} выполнен.";
 
         case 'gkick':
@@ -696,7 +719,7 @@ function executeApprovedSuperAction(PDO $pdo, array $req, int $approverId): stri
             if ($peerId > 2000000000) {
                 vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $targetId]);
             }
-            sendMessage($peerId, "🔨 Пользователь заблокирован (одобрено Создателем)\n👤 Нарушитель: {$uTarget}\n👮 Выдал: {$uActor}\n👑 Одобрил: {$uOwner}\n⏳ Срок: {$days} дн.\n📝 Причина: {$reason}");
+            sendMessage($peerId, "🔨 {$uActor} заблокировал(а) {$uTargetAcc} (одобрено Создателем)\n👑 Одобрил: {$uOwner}\n⏳ Срок: {$days} дн.\n📝 Причина: {$reason}");
             return "Бан {$uTarget} на {$days} дн. выполнен.";
 
         case 'gban':
@@ -732,13 +755,13 @@ function executeApprovedSuperAction(PDO $pdo, array $req, int $approverId): stri
             $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type = 'mute'")->execute([$peerId, $targetId]);
             $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, ?, 'mute', ?, 1, ?)")
                 ->execute([$peerId, $targetId, $actorId, $reason, $expires]);
-            sendMessage($peerId, "🔇 Пользователь заглушён (одобрено Создателем)\n👤 Нарушитель: {$uTarget}\n👮 Выдал: {$uActor}\n👑 Одобрил: {$uOwner}\n⏳ Срок: {$mins} мин.\n📝 Причина: {$reason}");
+            sendMessage($peerId, "🔇 {$uActor} заглушил(а) {$uTargetAcc} (одобрено Создателем)\n👑 Одобрил: {$uOwner}\n⏳ Срок: {$mins} мин.\n📝 Причина: {$reason}");
             return "Мут {$uTarget} на {$mins} мин. выполнен.";
 
         case 'warn':
             $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active) VALUES (?, ?, ?, 'warn', ?, 1)")
                 ->execute([$peerId, $targetId, $actorId, $reason]);
-            sendMessage($peerId, "⚠️ Выдано предупреждение (одобрено Создателем)\n👤 Нарушитель: {$uTarget}\n👮 Выдал: {$uActor}\n👑 Одобрил: {$uOwner}\n📝 Причина: {$reason}");
+            sendMessage($peerId, "⚠️ {$uActor} выдал(а) предупреждение {$uTargetDat} (одобрено Создателем)\n👑 Одобрил: {$uOwner}\n📝 Причина: {$reason}");
             return "Варн {$uTarget} выдан.";
 
         case 'removerole':
@@ -747,7 +770,7 @@ function executeApprovedSuperAction(PDO $pdo, array $req, int $approverId): stri
             foreach ($peers as $pId) {
                 $pdo->prepare("UPDATE bot_chat_members SET role_priority = 0 WHERE peer_id = ? AND vk_id = ?")->execute([$pId, $targetId]);
             }
-            sendMessage($peerId, "🛡 Все роли сняты (одобрено Создателем)\n👤 Пользователь: {$uTarget}\n👮 Снял: {$uActor}\n👑 Одобрил: {$uOwner}");
+            sendMessage($peerId, "🛡 {$uActor} снял(а) все роли с {$uTargetGen} (одобрено Создателем)\n👑 Одобрил: {$uOwner}");
             return "Роли с {$uTarget} сняты.";
     }
     return "Действие выполнено.";
@@ -1101,7 +1124,7 @@ function checkAntiDrain(PDO $pdo, int $peerId, int $actorId, int $actorPriority,
         if ($peerId > 2000000000) {
             vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $actorId]);
         }
-        $uActor = formatUserMention($pdo, $peerId, $actorId);
+        $uActor = formatUserMention($pdo, $peerId, $actorId, 'gen');
         $alert = "🚨 [АНТИ-СЛИВ] Обнаружена подозрительная активность администратора {$uActor} (4+ киков/банов/снятий ролей за 2 минуты)!\n🛡 Роль немедленно снята, нарушитель исключён из беседы.";
         sendMessage($peerId, $alert);
         sendToLogChat($pdo, "Беседа {$peerId}:\n" . $alert);

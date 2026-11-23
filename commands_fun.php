@@ -352,7 +352,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             }
             $marriageStr = 'Холост / Не замужем';
             if (!empty($g['spouse_vk_id'])) {
-                $marriageStr = "В браке с " . formatUserMention($pdo, $peerId, (int)$g['spouse_vk_id']);
+                $marriageStr = "В браке с " . formatUserMention($pdo, $peerId, (int)$g['spouse_vk_id'], 'ins');
             }
             $vipBadge = ((int)$g['is_vip'] === 1 || (int)$g['is_superadmin'] === 1) ? ' 💎 [VIP]' : '';
             $mention = formatUserMention($pdo, $peerId, $targetId);
@@ -550,16 +550,17 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             $tBal = (int)$tCtx['global']['balance'];
             if ($tBal < 500) { sendMessage($peerId, "🥷 У цели на руках меньше 500 ₽."); return true; }
             $pdo->prepare("UPDATE bot_users SET last_rob = NOW() WHERE vk_id = ?")->execute([$fromId]);
-            $uTarget = formatUserMention($pdo, $peerId, $targetId);
+            $uTargetGen = formatUserMention($pdo, $peerId, $targetId, 'gen');
+            $uTargetAcc = formatUserMention($pdo, $peerId, $targetId, 'acc');
             if (random_int(1, 100) <= 45) {
                 $stolen = min((int)round($tBal * (random_int(10, 25) / 100)), 50000);
                 $pdo->prepare("UPDATE bot_users SET balance = balance - ? WHERE vk_id = ?")->execute([$stolen, $targetId]);
                 $pdo->prepare("UPDATE bot_users SET balance = balance + ? WHERE vk_id = ?")->execute([$stolen, $fromId]);
-                sendMessage($peerId, "🥷 Успешное ограбление! Вы вытащили у {$uTarget} " . formatMoney($stolen) . "!");
+                sendMessage($peerId, "🥷 Успешное ограбление! Вы вытащили у {$uTargetGen} " . formatMoney($stolen) . "!");
             } else {
                 $fine = min((int)$ctx['global']['balance'], random_int(300, 1200));
                 $pdo->prepare("UPDATE bot_users SET balance = GREATEST(0, balance - ?) WHERE vk_id = ?")->execute([$fine, $fromId]);
-                sendMessage($peerId, "🚔 Вас поймали при попытке ограбить {$uTarget}! Штраф: " . formatMoney($fine) . ".");
+                sendMessage($peerId, "🚔 Вас поймали при попытке ограбить {$uTargetAcc}! Штраф: " . formatMoney($fine) . ".");
             }
             return true;
 
@@ -638,7 +639,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             ensureUserAndMember($pdo, $peerId, $targetId);
             $pdo->prepare("UPDATE bot_users SET balance = balance - ? WHERE vk_id = ?")->execute([$amount, $fromId]);
             $pdo->prepare("UPDATE bot_users SET balance = balance + ? WHERE vk_id = ?")->execute([$amount, $targetId]);
-            sendMessage($peerId, "💸 Перевод выполнен: " . formatMoney($amount) . " отправлено " . formatUserMention($pdo, $peerId, $targetId) . ".");
+            sendMessage($peerId, "💸 Перевод выполнен: " . formatMoney($amount) . " отправлено " . formatUserMention($pdo, $peerId, $targetId, 'dat') . ".");
             return true;
 
         case 'duel':
@@ -733,13 +734,13 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             @file_put_contents($repFile, (string)time());
             ensureUserAndMember($pdo, $peerId, $targetId);
             $pdo->prepare("UPDATE bot_users SET reputation = reputation + 1 WHERE vk_id = ?")->execute([$targetId]);
-            sendMessage($peerId, "⭐ " . formatUserMention($pdo, $peerId, $fromId) . " повысил(а) репутацию " . formatUserMention($pdo, $peerId, $targetId) . " (+1)!");
+            sendMessage($peerId, "⭐ " . formatUserMention($pdo, $peerId, $fromId) . " повысил(а) репутацию " . formatUserMention($pdo, $peerId, $targetId, 'dat') . " (+1)!");
             return true;
 
         case 'stickers':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args) ?? $fromId;
             $tCtx = ($targetId === $fromId) ? $ctx : ensureUserAndMember($pdo, $peerId, $targetId);
-            sendMessage($peerId, "🎭 Стикеры " . formatUserMention($pdo, $peerId, $targetId) . ":\n• В беседе: {$tCtx['member']['stickers_count']} шт.\n• Всего: {$tCtx['global']['total_stickers']} шт.");
+            sendMessage($peerId, "🎭 Стикеры " . formatUserMention($pdo, $peerId, $targetId, 'gen') . ":\n• В беседе: {$tCtx['member']['stickers_count']} шт.\n• Всего: {$tCtx['global']['total_stickers']} шт.");
             return true;
 
         case 'emoji':
@@ -749,7 +750,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             }
             $e = mb_substr(trim($args), 0, 8);
             $pdo->prepare("UPDATE bot_chat_members SET emoji = ? WHERE peer_id = ? AND vk_id = ?")->execute([$e !== '' ? $e : null, $peerId, $fromId]);
-            unset($GLOBALS['_mention_cache']["{$peerId}:{$fromId}"]);
+            unset($GLOBALS['_mention_cache']["{$peerId}:{$fromId}"], $GLOBALS['_mention_raw_cache']["{$peerId}:{$fromId}"]);
             sendMessage($peerId, $e !== '' ? "🌟 Ваш эмодзи установлен: {$e}" : "🗑 Эмодзи удалён.");
             return true;
 
@@ -759,7 +760,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !никэмодзи [ID/упоминание] [смайл]"); return true; }
             ensureUserAndMember($pdo, $peerId, $targetId);
             $pdo->prepare("UPDATE bot_chat_members SET emoji = ? WHERE peer_id = ? AND vk_id = ?")->execute([$e !== '' ? $e : null, $peerId, $targetId]);
-            unset($GLOBALS['_mention_cache']["{$peerId}:{$targetId}"]);
+            unset($GLOBALS['_mention_cache']["{$peerId}:{$targetId}"], $GLOBALS['_mention_raw_cache']["{$peerId}:{$targetId}"]);
             sendMessage($peerId, "✅ Эмодзи обновлён: " . formatUserMention($pdo, $peerId, $targetId));
             return true;
 
@@ -825,7 +826,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                     $pdo->prepare("UPDATE bot_users SET spouse_vk_id = ?, marriage_date = NOW() WHERE vk_id = ?")->execute([$fromId, $proposerId]);
                     sendMessage($peerId, "💍 Горько! {$u1} и {$u2} вступили в брак!");
                 } else {
-                    sendMessage($peerId, "💔 {$u2} отклонил(а) предложение от {$u1}.");
+                    sendMessage($peerId, "💔 {$u2} отклонил(а) предложение от " . formatUserMention($pdo, $peerId, $proposerId, 'gen') . ".");
                 }
                 return true;
             }
@@ -846,7 +847,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             $spouseId = (int)($ctx['global']['spouse_vk_id'] ?? 0);
             if ($spouseId <= 0) { sendMessage($peerId, "⚠️ Вы не состоите в браке."); return true; }
             $pdo->prepare("UPDATE bot_users SET spouse_vk_id = NULL, marriage_date = NULL WHERE vk_id IN (?, ?)")->execute([$fromId, $spouseId]);
-            sendMessage($peerId, "💔 Ваш брак с " . formatUserMention($pdo, $peerId, $spouseId) . " расторгнут.");
+            sendMessage($peerId, "💔 Ваш брак с " . formatUserMention($pdo, $peerId, $spouseId, 'ins') . " расторгнут.");
             return true;
 
         case 'marriages':
@@ -873,12 +874,15 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
         case 'kiss': case 'hug': case 'iznas': case 'minet':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Укажите участника беседы."); return true; }
-            $u1 = formatUserMention($pdo, $peerId, $fromId); $u2 = formatUserMention($pdo, $peerId, $targetId);
+            $u1    = formatUserMention($pdo, $peerId, $fromId);
+            $u2Acc = formatUserMention($pdo, $peerId, $targetId, 'acc');
+            $u2Dat = formatUserMention($pdo, $peerId, $targetId, 'dat');
+            $u2Ins = formatUserMention($pdo, $peerId, $targetId, 'ins');
             $actions = [
-                'kiss'  => "💋 {$u1} страстно поцеловал(а) {$u2}!",
-                'hug'   => "🤗 {$u1} крепко обнял(а) {$u2}!",
-                'iznas' => "🔞 {$u1} жёстко надругался(ась) над {$u2}!",
-                'minet' => "🍓 {$u1} доставил(а) незабываемое удовольствие {$u2}!"
+                'kiss'  => "💋 {$u1} страстно поцеловал(а) {$u2Acc}!",
+                'hug'   => "🤗 {$u1} крепко обнял(а) {$u2Acc}!",
+                'iznas' => "🔞 {$u1} жёстко надругался(ась) над {$u2Ins}!",
+                'minet' => "🍓 {$u1} сделал(а) приятно {$u2Dat}!"
             ];
             sendMessage($peerId, $actions[$cmd]);
             return true;
@@ -1173,7 +1177,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 sendMessage($peerId, "⚠️ {$uM}, нейросеть сейчас перегружена и не успела ответить. Попробуйте повторить вопрос через пару секунд.");
                 return true;
             }
-            sendMessage($peerId, "🤖 Ответ ИИ для {$uM}:\n\n{$answer}", null, ['disable_mentions' => 1]);
+            sendMessage($peerId, "🤖 Ответ ИИ для " . formatUserMention($pdo, $peerId, $fromId, 'gen') . ":\n\n{$answer}", null, ['disable_mentions' => 1]);
             return true;
 
 
