@@ -324,31 +324,55 @@ function generateQuoteImage(string $quoteText, string $authorName, ?string $avat
 }
 
 /**
- * Загрузка готовой картинки в VK и получение строки вложения photo{owner}_{id}
+ * Загрузка готовой картинки в VK и получение ['attachment' => 'photo...', 'error' => null|string]
  */
-function uploadPhotoToVkMessage(int $peerId, string $filePath): ?string {
-    $srv = vkApi('photos.getMessagesUploadServer', ['peer_id' => $peerId]);
+function uploadPhotoToVkMessage(int $peerId, string $filePath): array {
+    // Для ботов в беседах VK API рекомендует peer_id = 0; при ошибке пробуем с реальным peer_id
+    $srv = vkApi('photos.getMessagesUploadServer', ['peer_id' => 0]);
+    if (empty($srv['response']['upload_url']) && $peerId > 0) {
+        $srv = vkApi('photos.getMessagesUploadServer', ['peer_id' => $peerId]);
+    }
+
     $uploadUrl = (string)($srv['response']['upload_url'] ?? '');
     if ($uploadUrl === '') {
-        return null;
+        $code = (int)($srv['error']['error_code'] ?? 0);
+        $msg  = (string)($srv['error']['error_msg'] ?? 'empty upload_url');
+        file_put_contents('php://stderr', "[QUOTE UPLOAD] getMessagesUploadServer failed ({$code}): {$msg}" . PHP_EOL);
+        if ($code === 15 || $code === 27 || $code === 5) {
+            return [
+                'attachment' => null,
+                'error' => "У токена сообщества ВК нет права «Фотографии» (код {$code}). Пересоздайте ключ доступа в управлении группой ВК с галочками «Сообщения» + «Фотографии» и обновите VK_GROUP_TOKEN на BotHost."
+            ];
+        }
+        return ['attachment' => null, 'error' => "VK getMessagesUploadServer (код {$code}): {$msg}"];
     }
 
     $ch = curl_init($uploadUrl);
     curl_setopt_array($ch, [
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => ['photo' => new CURLFile($filePath, 'image/jpeg', 'quote.jpg')],
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_CONNECTTIMEOUT => 3,
-        CURLOPT_TIMEOUT        => 8,
-        CURLOPT_NOSIGNAL       => 1,
-        CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4,
+        CURLOPT_POST              => true,
+        CURLOPT_POSTFIELDS        => ['photo' => new CURLFile($filePath, 'image/jpeg', 'quote.jpg')],
+        CURLOPT_HTTPHEADER        => ['Expect:'],
+        CURLOPT_RETURNTRANSFER    => true,
+        CURLOPT_FOLLOWLOCATION    => true,
+        CURLOPT_CONNECTTIMEOUT    => 4,
+        CURLOPT_TIMEOUT           => 12,
+        CURLOPT_NOSIGNAL          => 1,
+        CURLOPT_IPRESOLVE         => CURL_IPRESOLVE_V4,
+        CURLOPT_USERAGENT         => 'RaseRussiaBot',
     ]);
     $raw = curl_exec($ch);
+    $curlErr = curl_error($ch);
     curl_close($ch);
 
+    if ($raw === false || $raw === '') {
+        file_put_contents('php://stderr', "[QUOTE UPLOAD] HTTP upload failed: {$curlErr}" . PHP_EOL);
+        return ['attachment' => null, 'error' => "Ошибка отправки файла на сервер ВК: {$curlErr}"];
+    }
+
     $up = json_decode((string)$raw, true);
-    if (empty($up['photo']) || empty($up['hash']) || !isset($up['server'])) {
-        return null;
+    if (!is_array($up) || empty($up['photo']) || $up['photo'] === '[]' || empty($up['hash']) || !isset($up['server'])) {
+        file_put_contents('php://stderr', "[QUOTE UPLOAD] Invalid upload response: " . mb_substr((string)$raw, 0, 300) . PHP_EOL);
+        return ['attachment' => null, 'error' => "Сервер ВК отклонил файл изображения."];
     }
 
     $saved = vkApi('photos.saveMessagesPhoto', [
@@ -359,8 +383,15 @@ function uploadPhotoToVkMessage(int $peerId, string $filePath): ?string {
 
     $p = $saved['response'][0] ?? null;
     if (empty($p['owner_id']) || empty($p['id'])) {
-        return null;
+        $code = (int)($saved['error']['error_code'] ?? 0);
+        $msg  = (string)($saved['error']['error_msg'] ?? 'save failed');
+        file_put_contents('php://stderr', "[QUOTE UPLOAD] saveMessagesPhoto failed ({$code}): {$msg}" . PHP_EOL);
+        return ['attachment' => null, 'error' => "VK saveMessagesPhoto (код {$code}): {$msg}"];
     }
 
-    return "photo{$p['owner_id']}_{$p['id']}";
+    $att = "photo{$p['owner_id']}_{$p['id']}";
+    if (!empty($p['access_key'])) {
+        $att .= '_' . $p['access_key'];
+    }
+    return ['attachment' => $att, 'error' => null];
 }

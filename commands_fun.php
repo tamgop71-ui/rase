@@ -1236,15 +1236,16 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 return true;
             }
 
-            $attachment = uploadPhotoToVkMessage($peerId, $imgPath);
+            $upRes = uploadPhotoToVkMessage($peerId, $imgPath);
             @unlink($imgPath);
 
-            if ($attachment === null) {
-                sendMessage($peerId, "⚠️ Не удалось загрузить картинку в ВКонтакте. Попробуйте ещё раз.");
+            if (empty($upRes['attachment'])) {
+                $errDetail = !empty($upRes['error']) ? ("\nПричина: " . $upRes['error']) : "";
+                sendMessage($peerId, "⚠️ Не удалось загрузить картинку в ВКонтакте.{$errDetail}");
                 return true;
             }
 
-            sendMessage($peerId, "", null, ['attachment' => $attachment]);
+            sendMessage($peerId, "", null, ['attachment' => $upRes['attachment']]);
             return true;
 
     }
