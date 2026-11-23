@@ -98,6 +98,100 @@ function refreshChatTitle(PDO $pdo, int $peerId): string {
 /**
  * Быстрая загрузка контекста за 1 SELECT + 1 объединённый multi-table UPDATE
  */
+
+/**
+ * Универсальная синхронизация беседы (используется и вручную в !sync, и автоматически в worker.php).
+ * Обновляет название чата, профили участников, выдаёт роль 100 владельцу ВК и 60 админам со звездой.
+ */
+function syncChatMembers(PDO $pdo, int $peerId): array {
+    if ($peerId <= 2000000000) {
+        return ['ok' => false, 'synced' => 0];
+    }
+    $res = vkApi('messages.getConversationMembers', ['peer_id' => $peerId]);
+    $items = $res['response']['items'] ?? [];
+    $profiles = $res['response']['profiles'] ?? [];
+    if (empty($items)) {
+        return ['ok' => false, 'synced' => 0];
+    }
+
+    $profMap = [];
+    foreach ($profiles as $p) {
+        $profMap[(int)$p['id']] = $p;
+    }
+
+    $stUser = $pdo->prepare("INSERT INTO bot_users (vk_id, first_name, last_name) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE first_name = VALUES(first_name), last_name = VALUES(last_name)");
+    $stMem  = $pdo->prepare("INSERT INTO bot_chat_members (peer_id, vk_id, role_priority) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE role_priority = GREATEST(role_priority, VALUES(role_priority))");
+    $stOwn  = $pdo->prepare("UPDATE bot_chats SET owner_vk_id = ? WHERE peer_id = ? AND owner_vk_id = 0");
+
+    $synced = 0;
+    foreach ($items as $item) {
+        $mid = (int)($item['member_id'] ?? 0);
+        if ($mid <= 0) continue;
+        $fn = $profMap[$mid]['first_name'] ?? 'Игрок';
+        $ln = $profMap[$mid]['last_name'] ?? '';
+        $stUser->execute([$mid, $fn, $ln]);
+        $prio = !empty($item['is_owner']) ? 100 : (!empty($item['is_admin']) ? 60 : 0);
+        if (!empty($item['is_owner'])) {
+            $stOwn->execute([$mid, $peerId]);
+        }
+        $stMem->execute([$peerId, $mid, $prio]);
+        $synced++;
+    }
+
+    refreshChatTitle($pdo, $peerId);
+    return ['ok' => true, 'synced' => $synced];
+}
+
+/**
+ * Генерация сводки активности и модерации беседы за сегодня (!отчёт / !автоотчёт)
+ */
+function buildDailyReportText(PDO $pdo, int $peerId): string {
+    $stChat = $pdo->prepare("SELECT title, total_messages FROM bot_chats WHERE peer_id = ?");
+    $stChat->execute([$peerId]);
+    $chat = $stChat->fetch() ?: ['title' => "Беседа #{$peerId}", 'total_messages' => 0];
+
+    $stActive = $pdo->prepare("SELECT COUNT(*) FROM bot_chat_members WHERE peer_id = ? AND DATE(last_active_at) = CURDATE()");
+    $stActive->execute([$peerId]);
+    $activeUsers = (int)$stActive->fetchColumn();
+
+    $stPun = $pdo->prepare("SELECT type, COUNT(*) AS cnt FROM bot_punishments WHERE peer_id = ? AND DATE(created_at) = CURDATE() GROUP BY type");
+    $stPun->execute([$peerId]);
+    $pMap = ['warn' => 0, 'mute' => 0, 'kick' => 0, 'ban' => 0, 'gban' => 0];
+    while ($r = $stPun->fetch()) {
+        $pMap[$r['type']] = (int)$r['cnt'];
+    }
+    $totalPun = array_sum($pMap);
+
+    $stTopAdm = $pdo->prepare("SELECT actor_vk_id, COUNT(*) AS cnt FROM bot_punishments WHERE peer_id = ? AND actor_vk_id > 0 AND DATE(created_at) = CURDATE() GROUP BY actor_vk_id ORDER BY cnt DESC LIMIT 3");
+    $stTopAdm->execute([$peerId]);
+    $topAdms = $stTopAdm->fetchAll();
+
+    $stRep = $pdo->prepare("SELECT COUNT(*) FROM bot_reports WHERE peer_id = ? AND status IN ('open','in_progress')");
+    $stRep->execute([$peerId]);
+    $openReps = (int)$stRep->fetchColumn();
+
+    $lines = [
+        "📊 Суточная сводка беседы «{$chat['title']}» (" . date('d.m.Y') . "):",
+        "━━━━━━━━━━━━━━━━━━",
+        "👥 Активных участников сегодня: {$activeUsers}",
+        "✉️ Всего сообщений в беседе: " . number_format((int)$chat['total_messages'], 0, '.', ' '),
+        "🛡 Выдано наказаний сегодня: {$totalPun} (⚠️ Варнов: {$pMap['warn']} | 🔇 Мутов: {$pMap['mute']} | 👢 Киков: {$pMap['kick']} | 🔨 Банов: " . ($pMap['ban'] + $pMap['gban']) . ")",
+        "📬 Открытых репортов из чата: {$openReps}"
+    ];
+
+    if (!empty($topAdms)) {
+        preloadUsers($pdo, $peerId, array_column($topAdms, 'actor_vk_id'));
+        $lines[] = "\n🏆 Топ модераторов за сегодня:";
+        $i = 1;
+        foreach ($topAdms as $a) {
+            $lines[] = "{$i}. " . formatUserMention($pdo, $peerId, (int)$a['actor_vk_id']) . " — {$a['cnt']} действ.";
+            $i++;
+        }
+    }
+
+    return implode("\n", $lines);
+}
+
 function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = '', bool $hasSticker = false, bool $deferStatsUpdate = false): array {
     $charLen = mb_strlen($text);
     $stickerInc = $hasSticker ? 1 : 0;
@@ -113,7 +207,7 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
             u.total_messages, u.total_chars, u.total_stickers,
             c.peer_id AS c_exists, c.title, c.owner_vk_id, c.unity_id, c.rules_text, c.welcome_text,
             c.games_enabled, c.silence_until, c.silence_action, c.automod_enabled, c.antiflood_enabled,
-            c.antidrain_enabled, c.antiraid_enabled, c.anticaps_enabled, c.antisticker_enabled, c.slowmode_sec, c.mentions_enabled,
+            c.antidrain_enabled, c.antiraid_enabled, c.anticaps_enabled, c.antisticker_enabled, c.autosync_enabled, c.daily_report_time, c.slowmode_sec, c.mentions_enabled,
             c.listen_target_vk_id, c.listen_until, c.total_messages AS chat_total_messages,
             m.vk_id AS m_exists, m.nickname, m.emoji, m.role_priority, m.gm_granted_by, m.gm_min_priority,
             m.mention_opt_in, m.invited_by, m.temp_role_until, m.vacation_until, m.vacation_reason, m.messages_count, m.chars_count, m.stickers_count, m.joined_at, m.last_active_at,
@@ -237,6 +331,8 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
         'antiraid_enabled'    => (int)($row['antiraid_enabled'] ?? 0),
         'anticaps_enabled'    => (int)($row['anticaps_enabled'] ?? 0),
         'antisticker_enabled' => (int)($row['antisticker_enabled'] ?? 0),
+        'autosync_enabled'    => (int)($row['autosync_enabled'] ?? 1),
+        'daily_report_time'   => $row['daily_report_time'] ?? null,
         'slowmode_sec'        => (int)($row['slowmode_sec'] ?? 0),
         'mentions_enabled'    => (int)($row['mentions_enabled'] ?? 1),
         'listen_target_vk_id' => $row['listen_target_vk_id'] ?? null,
@@ -897,7 +993,7 @@ function recordRecentMessage(int $peerId, int $cmid, int $fromId): void {
     if (count($list) > 120) {
         $list = array_slice($list, -120);
     }
-    @file_put_contents($file, json_encode($list), LOCK_EX);
+    $tmp = $file . '.' . getmypid() . '.tmp'; if (@file_put_contents($tmp, json_encode($list)) !== false) @rename($tmp, $file);
 }
 
 function popRecentMessages(int $peerId, ?int $targetId, int $limit): array {
@@ -914,7 +1010,7 @@ function popRecentMessages(int $peerId, ?int $targetId, int $limit): array {
             $remaining[] = $item;
         }
     }
-    @file_put_contents($file, json_encode(array_reverse($remaining)), LOCK_EX);
+    $tmp = $file . '.' . getmypid() . '.tmp'; if (@file_put_contents($tmp, json_encode(array_reverse($remaining))) !== false) @rename($tmp, $file);
     return $matched;
 }
 
@@ -929,7 +1025,7 @@ function setAfkCache(int $vkId, ?array $info): void {
     } else {
         $data[(string)$vkId] = $info;
     }
-    @file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX);
+    $tmp = $file . '.' . getmypid() . '.tmp'; if (@file_put_contents($tmp, json_encode($data, JSON_UNESCAPED_UNICODE)) !== false) @rename($tmp, $file);
 }
 
 function getAfkFromCache(int $vkId): ?array {

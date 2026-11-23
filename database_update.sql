@@ -57,6 +57,9 @@ CREATE TABLE IF NOT EXISTS `bot_chats` (
     `antiraid_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `anticaps_enabled` TINYINT(1) NOT NULL DEFAULT 0,
     `antisticker_enabled` TINYINT(1) NOT NULL DEFAULT 0,
+    `autosync_enabled` TINYINT(1) NOT NULL DEFAULT 1,
+    `daily_report_time` VARCHAR(5) DEFAULT NULL,
+    `last_daily_report_date` DATE DEFAULT NULL,
     `slowmode_sec` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
     `mentions_enabled` TINYINT(1) NOT NULL DEFAULT 1,
     `listen_target_vk_id` BIGINT UNSIGNED DEFAULT NULL,
@@ -305,6 +308,28 @@ CREATE TABLE IF NOT EXISTS `bot_super_requests` (
     KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+
+-- 22. Розыгрыши на кнопках (!розыгрыш)
+CREATE TABLE IF NOT EXISTS `bot_giveaways` (
+    `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `peer_id` BIGINT UNSIGNED NOT NULL,
+    `author_vk_id` BIGINT UNSIGNED NOT NULL,
+    `prize` BIGINT NOT NULL DEFAULT 1000,
+    `winners_count` TINYINT UNSIGNED NOT NULL DEFAULT 1,
+    `ends_at` DATETIME NOT NULL,
+    `is_finished` TINYINT(1) NOT NULL DEFAULT 0,
+    `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_active_ends` (`is_finished`, `ends_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `bot_giveaway_entries` (
+    `giveaway_id` INT UNSIGNED NOT NULL,
+    `vk_id` BIGINT UNSIGNED NOT NULL,
+    `joined_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`giveaway_id`, `vk_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Безопасное добавление новых колонок без потери существующих данных
 DROP PROCEDURE IF EXISTS `bot_safe_migrate`;
 DELIMITER $$
@@ -374,6 +399,15 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='antisticker_enabled') THEN
         ALTER TABLE `bot_chats` ADD COLUMN `antisticker_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `anticaps_enabled`;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='autosync_enabled') THEN
+        ALTER TABLE `bot_chats` ADD COLUMN `autosync_enabled` TINYINT(1) NOT NULL DEFAULT 1 AFTER `antisticker_enabled`;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='daily_report_time') THEN
+        ALTER TABLE `bot_chats` ADD COLUMN `daily_report_time` VARCHAR(5) DEFAULT NULL AFTER `autosync_enabled`;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chats' AND COLUMN_NAME='last_daily_report_date') THEN
+        ALTER TABLE `bot_chats` ADD COLUMN `last_daily_report_date` DATE DEFAULT NULL AFTER `daily_report_time`;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='bot_chat_members' AND COLUMN_NAME='invited_by') THEN
         ALTER TABLE `bot_chat_members` ADD COLUMN `invited_by` BIGINT UNSIGNED DEFAULT NULL AFTER `mention_opt_in`;

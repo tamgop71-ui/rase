@@ -11,7 +11,10 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
         // ==========================================
         case 'ping':
             $totalMs = isset($GLOBALS['_req_start']) ? round((microtime(true) - $GLOBALS['_req_start']) * 1000, 1) : 1.0;
-            sendMessage($peerId, "🏓 Понг! Бот RASE RUSSIA работает исправно.\n⚡ Скорость ответа: {$totalMs} мс\n🕒 Сервер: " . date('d.m.Y H:i:s') . " МСК");
+            $hb = is_file('/tmp/worker_hb.txt') ? (int)@file_get_contents('/tmp/worker_hb.txt') : 0;
+            $wDiff = $hb > 0 ? (time() - $hb) : -1;
+            $wStatus = ($wDiff >= 0 && $wDiff <= 45) ? "🟢 Активен ({$wDiff}с назад)" : "🟡 Перезапуск...";
+            sendMessage($peerId, "🏓 Понг! Бот RASE RUSSIA работает исправно.\n⚡ Скорость ответа: {$totalMs} мс\n⚙ Фоновый демон: {$wStatus}\n🕒 Сервер: " . date('d.m.Y H:i:s') . " МСК");
             return true;
 
         case 'start':
@@ -61,7 +64,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "• !поцелуй / !обнять / !попытка / !пиво / !iznas / !minet";
             } elseif ($cat === 'mod20') {
                 $txt = "🛡 Команды Помощника (приоритет ≥ 20):\n\n"
-                     . "• !стата / !досье (!whois) [ID] / !чатинфо / !актив [дни]\n"
+                     . "• !стата / !досье (!whois) [ID] / !чатинфо / !отчёт / !актив [дни]\n"
                      . "• !отпуск [дни] (причина) / !отпуска — реестр отпусков\n"
                      . "• !мут [ID] [мин] (причина) / !унмут [ID]\n"
                      . "• !кик [ID] (причина) — исключить из чата\n"
@@ -83,7 +86,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 $txt = "⚡ Администратор (60+) и Гл. Админ (80+):\n\n"
                      . "Приоритет ≥ 60:\n"
                      . "• !модер / !grole / !temprole [ID] [роль] [дни]\n"
-                     . "• !gban / !gunban [ID] | !маскик / !массбан [ID...] | !анонс [текст]\n"
+                     . "• !gban / !gunban [ID] | !маскик / !массбан | !анонс | !розыгрыш\n"
                      . "• !удалить (пересланное)\n"
                      . "• !gm [ID] / !removegm [ID] / !gms — иммунитет\n"
                      . "• !history [ID] / !reports / !getreport\n\n"
@@ -94,12 +97,12 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "• !создатьпромо [КОД] [СУММА] [КОЛ-ВО] — промокоды\n"
                      . "• !pin / !unpin | !admin / !gadmin | !newrole / !delrole\n"
                      . "• !welcome / !setrules / !delrules / !заметки\n"
-                     . "• !неактив [дни] (кик) | !givemoney | !timeuved";
+                     . "• !неактив [дни] (кик) | !givemoney | !timeuved | !автоотчёт [ЧЧ:ММ]";
             } elseif ($cat === 'owner') {
                 $txt = "👑 Владелец беседы (100) и Супер-доступ (/addws):\n\n"
                      . "• !setup / !settings / !gsettings / !gedit\n"
                      . "• !антислив (!antidrain) | !антирейд (!antiraid) — защита чата\n"
-                     . "• !automod / !антифлуд / !антикапс / !антистикер / !games / !уведы\n"
+                     . "• !automod / !антифлуд / !антикапс / !антистикер / !автосинк / !games\n"
                      . "• !бэкап / !передать [ID] / !запретить / !разрешить / !очиститьнастройки\n"
                      . "• !unity / !unites / !createunity / !addunity / !editunity / !removeunity / !deleteunity\n"
                      . "• !sync / !spec / !gspec / !wipe / !migration / !clone [ID]\n"
@@ -1067,6 +1070,63 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 $i++;
             }
             sendMessage($peerId, implode("\n", $lines));
+            return true;
+
+
+        case 'giveaway':
+            $raw = trim($args);
+            // Участие по кнопке: !giveaway join [id]
+            if (preg_match('/^(?:join|участвовать)\s+(\d+)$/iu', $raw, $m)) {
+                $gwId = (int)$m[1];
+                $stG = $pdo->prepare("SELECT * FROM bot_giveaways WHERE id = ? AND peer_id = ?");
+                $stG->execute([$gwId, $peerId]);
+                $gw = $stG->fetch();
+                if (!$gw || (int)$gw['is_finished'] === 1) {
+                    sendMessage($peerId, "⏳ Розыгрыш #{$gwId} уже завершён.");
+                    return true;
+                }
+                $stAdd = $pdo->prepare("INSERT IGNORE INTO bot_giveaway_entries (giveaway_id, vk_id) VALUES (?, ?)");
+                $stAdd->execute([$gwId, $fromId]);
+                $stCnt = $pdo->prepare("SELECT COUNT(*) FROM bot_giveaway_entries WHERE giveaway_id = ?");
+                $stCnt->execute([$gwId]);
+                $totalEnt = (int)$stCnt->fetchColumn();
+                $uM = formatUserMention($pdo, $peerId, $fromId);
+                if ($stAdd->rowCount() > 0) {
+                    sendMessage($peerId, "🎟 {$uM} участвует в розыгрыше #{$gwId}! (Всего участников: {$totalEnt})", null, ['disable_mentions' => 1]);
+                } else {
+                    sendMessage($peerId, "ℹ️ {$uM}, вы уже участвуете в розыгрыше #{$gwId}! (Участников: {$totalEnt})", null, ['disable_mentions' => 1]);
+                }
+                return true;
+            }
+
+            // Создание розыгрыша (требуется роль 60+ или супер-доступ)
+            if (!$isSuper && $myPriority < 60) {
+                sendMessage($peerId, "⛔ Запускать розыгрыши могут Администраторы (60+) и выше.");
+                return true;
+            }
+            if (!preg_match('/^(\S+)\s+(\S+)(?:\s+(\d+))?$/iu', $raw, $m)) {
+                sendMessage($peerId, "🎉 Использование: !розыгрыш [сумма] [время] (победителей)\nПример: !розыгрыш 50к 10м 2");
+                return true;
+            }
+            $prize = parseAmount($m[1], 10000000);
+            $endsTs = parseReminderTime($m[2]);
+            $winnersCnt = !empty($m[3]) ? max(1, min(10, (int)$m[3])) : 1;
+            if ($prize === null || $prize < 100 || (!$isSuper && $prize > 5000000)) {
+                sendMessage($peerId, "⚠️ Укажите сумму от 100 ₽ до 5 000 000 ₽.");
+                return true;
+            }
+            if ($endsTs === null || ($endsTs - time()) < 30) {
+                sendMessage($peerId, "⚠️ Укажите корректное время (от 30с, например: 5м, 1ч, 18:00).");
+                return true;
+            }
+            $pdo->prepare("INSERT INTO bot_giveaways (peer_id, author_vk_id, prize, winners_count, ends_at, is_finished) VALUES (?, ?, ?, ?, ?, 0)")
+                ->execute([$peerId, $fromId, $prize, $winnersCnt, date('Y-m-d H:i:s', $endsTs)]);
+            $gwId = (int)$pdo->lastInsertId();
+            $uA = formatUserMention($pdo, $peerId, $fromId);
+            $kb = makeInlineKeyboard([[
+                ['label' => "🎉 Участвовать (#{$gwId})", 'payload' => ['cmd' => "!giveaway join {$gwId}"], 'color' => 'positive']
+            ]]);
+            sendMessage($peerId, "🎉 РОЗЫГРЫШ #{$gwId}!\n━━━━━━━━━━━━━━━━━━\n💰 Призовой фонд: " . formatMoney($prize) . "\n🏆 Победителей: {$winnersCnt}\n⏳ Итоги: " . date('d.m.Y в H:i', $endsTs) . " МСК\n👮 Организатор: {$uA}\n\n👇 Нажмите кнопку ниже, чтобы принять участие!", $kb);
             return true;
 
     }

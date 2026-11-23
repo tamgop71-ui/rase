@@ -900,33 +900,12 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             return true;
 
         case 'sync':
-            $res = vkApi('messages.getConversationMembers', ['peer_id' => $peerId]);
-            $items = $res['response']['items'] ?? [];
-            $profiles = $res['response']['profiles'] ?? [];
-            if (empty($items)) {
+            $syncRes = syncChatMembers($pdo, $peerId);
+            if (empty($syncRes['ok'])) {
                 sendMessage($peerId, "⚠️ Не удалось получить участников (выдайте боту права администратора беседы).");
                 return true;
             }
-            $profMap = [];
-            foreach ($profiles as $p) $profMap[(int)$p['id']] = $p;
-            $synced = 0;
-            foreach ($items as $item) {
-                $mid = (int)($item['member_id'] ?? 0);
-                if ($mid <= 0) continue;
-                $fn = $profMap[$mid]['first_name'] ?? 'Игрок';
-                $ln = $profMap[$mid]['last_name'] ?? '';
-                $pdo->prepare("INSERT INTO bot_users (vk_id, first_name, last_name) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE first_name = VALUES(first_name), last_name = VALUES(last_name)")
-                    ->execute([$mid, $fn, $ln]);
-                $prio = !empty($item['is_owner']) ? 100 : (!empty($item['is_admin']) ? 60 : 0);
-                if (!empty($item['is_owner'])) {
-                    $pdo->prepare("UPDATE bot_chats SET owner_vk_id = ? WHERE peer_id = ? AND owner_vk_id = 0")->execute([$mid, $peerId]);
-                }
-                $pdo->prepare("INSERT INTO bot_chat_members (peer_id, vk_id, role_priority) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE role_priority = GREATEST(role_priority, VALUES(role_priority))")
-                    ->execute([$peerId, $mid, $prio]);
-                $synced++;
-            }
-            refreshChatTitle($pdo, $peerId);
-            sendMessage($peerId, "🔄 Синхронизация завершена! Обновлено участников: {$synced} (Владельцу выдана роль 100, админам со звездой — 60).");
+            sendMessage($peerId, "🔄 Синхронизация завершена! Обновлено участников: {$syncRes['synced']} (Владельцу выдана роль 100, админам со звездой — 60).\nℹ️ Автоматическая синхронизация также работает в фоне каждые 10 минут.");
             return true;
 
         case 'settings':
@@ -935,7 +914,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $sub = mb_strtolower(trim($args));
             $peers = $isUnity ? getUnityPeers($pdo, $peerId) : [$peerId];
 
-            if (in_array($sub, ['games', 'silence', 'mentions', 'automod', 'antiflood', 'antidrain', 'antiraid', 'anticaps', 'antisticker'], true)) {
+            if (in_array($sub, ['games', 'silence', 'mentions', 'automod', 'antiflood', 'antidrain', 'antiraid', 'anticaps', 'antisticker', 'autosync'], true)) {
                 foreach ($peers as $pId) {
                     if ($sub === 'games') $pdo->prepare("UPDATE bot_chats SET games_enabled = 1 - games_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'automod') $pdo->prepare("UPDATE bot_chats SET automod_enabled = 1 - automod_enabled WHERE peer_id = ?")->execute([$pId]);
@@ -944,6 +923,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                     elseif ($sub === 'antiraid') $pdo->prepare("UPDATE bot_chats SET antiraid_enabled = 1 - antiraid_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'anticaps') $pdo->prepare("UPDATE bot_chats SET anticaps_enabled = 1 - anticaps_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'antisticker') $pdo->prepare("UPDATE bot_chats SET antisticker_enabled = 1 - antisticker_enabled WHERE peer_id = ?")->execute([$pId]);
+                    elseif ($sub === 'autosync') $pdo->prepare("UPDATE bot_chats SET autosync_enabled = 1 - autosync_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'mentions') $pdo->prepare("UPDATE bot_chats SET mentions_enabled = 1 - mentions_enabled WHERE peer_id = ?")->execute([$pId]);
                     elseif ($sub === 'silence') {
                         $stmtS = $pdo->prepare("SELECT silence_until FROM bot_chats WHERE peer_id = ?");
@@ -964,6 +944,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $rS = (int)($c['antiraid_enabled'] ?? 0) ? '✅' : '❌';
             $cS = (int)($c['anticaps_enabled'] ?? 0) ? '✅' : '❌';
             $stS = (int)($c['antisticker_enabled'] ?? 0) ? '✅' : '❌';
+            $asS = (int)($c['autosync_enabled'] ?? 1) ? '✅' : '❌';
             $mS = (int)$c['mentions_enabled'] ? '✅' : '❌';
             $sS = (!empty($c['silence_until']) && strtotime($c['silence_until']) > time()) ? '✅' : '❌';
             $pCmd = $isUnity ? '!gsettings' : '!settings';
@@ -985,6 +966,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                     ['label' => "🎭 Анти-стикер {$stS}", 'payload' => ['cmd' => "{$pCmd} antisticker"], 'color' => 'secondary']
                 ],
                 [
+                    ['label' => "🔄 Автосинк {$asS}", 'payload' => ['cmd' => "{$pCmd} autosync"], 'color' => 'primary'],
                     ['label' => "🔔 Упоминания {$mS}", 'payload' => ['cmd' => "{$pCmd} mentions"], 'color' => 'secondary']
                 ]
             ]);
@@ -2401,6 +2383,42 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
         case 'clearcache':
             $cnt = cacheClearAll();
             sendMessage($peerId, "⚡ Локальный кэш очищен! Удалено временных файлов: {$cnt}.");
+            return true;
+
+
+        case 'autosync':
+            $pdo->prepare("UPDATE bot_chats SET autosync_enabled = 1 - autosync_enabled WHERE peer_id = ?")->execute([$peerId]);
+            $stA = $pdo->prepare("SELECT autosync_enabled FROM bot_chats WHERE peer_id = ?");
+            $stA->execute([$peerId]);
+            $st = (int)$stA->fetchColumn();
+            sendMessage($peerId, $st
+                ? "🔄 Автосинхронизация включена! Бот сам обновляет участников, название чата и роли админов ВК каждые 10 минут."
+                : "🔄 Автосинхронизация отключена (можно синхронизировать вручную через !sync).");
+            return true;
+
+        case 'daystats':
+            sendMessage($peerId, buildDailyReportText($pdo, $peerId), null, ['disable_mentions' => 1]);
+            return true;
+
+        case 'dailyreport':
+            $raw = mb_strtolower(trim($args));
+            if ($raw === '') {
+                $cur = $ctx['chat']['daily_report_time'] ?? null;
+                sendMessage($peerId, "📊 Ежедневный авто-отчёт: " . ($cur ? "включён в {$cur} МСК" : "выключен") . "\nУстановить: !автоотчёт 23:00 | Выключить: !автоотчёт выкл");
+                return true;
+            }
+            if (in_array($raw, ['выкл', 'off', '0', 'стоп', 'stop'], true)) {
+                $pdo->prepare("UPDATE bot_chats SET daily_report_time = NULL WHERE peer_id = ?")->execute([$peerId]);
+                sendMessage($peerId, "📊 Ежедневный авто-отчёт отключён.");
+                return true;
+            }
+            if (!preg_match('/^([01]?\d|2[0-3]):([0-5]\d)$/', $raw, $m)) {
+                sendMessage($peerId, "⚠️ Укажите время в формате ЧЧ:ММ (например: !автоотчёт 23:00).");
+                return true;
+            }
+            $hm = sprintf('%02d:%02d', (int)$m[1], (int)$m[2]);
+            $pdo->prepare("UPDATE bot_chats SET daily_report_time = ? WHERE peer_id = ?")->execute([$hm, $peerId]);
+            sendMessage($peerId, "✅ Ежедневный авто-отчёт настроен! Каждый день в {$hm} МСК бот будет публиковать суточную сводку беседы.");
             return true;
 
     }

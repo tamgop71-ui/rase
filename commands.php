@@ -224,6 +224,11 @@ function getCommandAliasMap(): array {
         'sysunmute' => 'sysunmute', 'сисунмут' => 'sysunmute',
         'sysleave' => 'sysleave', 'выйтиизчата' => 'sysleave',
         'clearcache' => 'clearcache', 'сброскэша' => 'clearcache',
+        'розыгрыш' => 'giveaway', 'giveaway' => 'giveaway', 'конкурс' => 'giveaway',
+        'отчёт' => 'daystats', 'отчет' => 'daystats', 'daystats' => 'daystats', 'сводка' => 'daystats',
+        'автоотчёт' => 'dailyreport', 'автоотчет' => 'dailyreport', 'dailyreport' => 'dailyreport',
+        'автосинк' => 'autosync', 'autosync' => 'autosync',
+
 
 
 
@@ -248,7 +253,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'stats' => 20, 'chatinfo' => 20, 'mute' => 20, 'unmute' => 20, 'kick' => 20,
         'warn' => 20, 'unwarn' => 20, 'getwarns' => 20, 'getwarn' => 20, 'warnlist' => 20, 'mutelist' => 20,
         'getban' => 20, 'getmute' => 20, 'nick' => 20, 'snick' => 20, 'rnick' => 20,
-        'nlist' => 20, 'nonames' => 20, 'checknicks' => 20, 'zov' => 20, 'reg' => 20, 'kpi' => 20, 'whois' => 20, 'vacation' => 20, 'vacations' => 20,
+        'nlist' => 20, 'nonames' => 20, 'checknicks' => 20, 'zov' => 20, 'reg' => 20, 'kpi' => 20, 'whois' => 20, 'vacation' => 20, 'vacations' => 20, 'daystats' => 20,
 
         // >= 40 (Модератор)
         'ban' => 40, 'unban' => 40, 'banlist' => 40, 'clear' => 40, 'helper' => 40,
@@ -263,13 +268,13 @@ function getDefaultCmdPriority(string $cmd): int {
         'pin' => 80, 'unpin' => 80, 'admin' => 80, 'gadmin' => 80, 'newrole' => 80,
         'gnewrole' => 80, 'delrole' => 80, 'gdelrole' => 80, 'welcome' => 80,
         'setrules' => 80, 'delrules' => 80, 'setnote' => 80, 'inactive' => 80,
-        'givemoney' => 80, 'timeuved' => 80, 'enick' => 80, 'whitelist' => 80, 'massban' => 80, 'filter' => 80, 'trigger' => 80, 'createpromo' => 80,
+        'givemoney' => 80, 'timeuved' => 80, 'enick' => 80, 'whitelist' => 80, 'massban' => 80, 'dailyreport' => 80, 'filter' => 80, 'trigger' => 80, 'createpromo' => 80,
 
         // 100 (Владелец)
         'settings' => 100, 'gsettings' => 100, 'setup' => 100, 'unity' => 100, 'unites' => 100,
         'addunity' => 100, 'createunity' => 100, 'editunity' => 100, 'removeunity' => 100,
         'deleteunity' => 100, 'sync' => 100, 'spec' => 100, 'gspec' => 100, 'wipe' => 100,
-        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100, 'antidrain' => 100, 'antiraid' => 100, 'anticaps' => 100, 'antisticker' => 100, 'clonechat' => 100, 'backup' => 100, 'transferowner' => 100, 'disablecmd' => 100, 'enablecmd' => 100, 'resetsettings' => 100,
+        'migration' => 100, 'games' => 100, 'automod' => 100, 'antiflood' => 100, 'antidrain' => 100, 'antiraid' => 100, 'anticaps' => 100, 'antisticker' => 100, 'autosync' => 100, 'clonechat' => 100, 'backup' => 100, 'transferowner' => 100, 'disablecmd' => 100, 'enablecmd' => 100, 'resetsettings' => 100,
         'editcmd' => 100, 'geditcmd' => 100, 'gedit' => 100, 'owner' => 100,
 
         // 999 (Супер-доступ / Создатель)
@@ -341,7 +346,7 @@ function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int
     }
 
     // Ленивая подгрузка: загружаем ТОЛЬКО тот модуль (fun или mod), который нужен для этой команды
-    static $funSet = ['admins' => true, 'afk' => true, 'atop' => true, 'ball' => true, 'bank' => true, 'beer' => true, 'bonus' => true, 'case' => true, 'casino' => true, 'choose' => true, 'citizenship' => true, 'clan' => true, 'clans' => true, 'coin' => true, 'countries' => true, 'deposit' => true, 'divorce' => true, 'duel' => true, 'emoji' => true, 'enick' => true, 'help' => true, 'hug' => true, 'iznas' => true, 'kiss' => true, 'marriages' => true, 'marry' => true, 'mention_off' => true, 'mention_on' => true, 'mentions' => true, 'minet' => true, 'mycountry' => true, 'online' => true, 'pay' => true, 'ping' => true, 'poll' => true, 'profile' => true, 'promo' => true, 'quests' => true, 'remind' => true, 'reminders' => true, 'rep' => true, 'rob' => true, 'roles' => true, 'roll' => true, 'roulette' => true, 'rules' => true, 'shop' => true, 'slots' => true, 'start' => true, 'stickers' => true, 'thereid' => true, 'top' => true, 'try' => true, 'withdraw' => true, 'work' => true];
+    static $funSet = ['admins' => true, 'afk' => true, 'atop' => true, 'ball' => true, 'bank' => true, 'beer' => true, 'bonus' => true, 'case' => true, 'casino' => true, 'choose' => true, 'citizenship' => true, 'clan' => true, 'clans' => true, 'coin' => true, 'countries' => true, 'deposit' => true, 'divorce' => true, 'duel' => true, 'emoji' => true, 'enick' => true, 'giveaway' => true, 'help' => true, 'hug' => true, 'iznas' => true, 'kiss' => true, 'marriages' => true, 'marry' => true, 'mention_off' => true, 'mention_on' => true, 'mentions' => true, 'minet' => true, 'mycountry' => true, 'online' => true, 'pay' => true, 'ping' => true, 'poll' => true, 'profile' => true, 'promo' => true, 'quests' => true, 'remind' => true, 'reminders' => true, 'rep' => true, 'rob' => true, 'roles' => true, 'roll' => true, 'roulette' => true, 'rules' => true, 'shop' => true, 'slots' => true, 'start' => true, 'stickers' => true, 'thereid' => true, 'top' => true, 'try' => true, 'withdraw' => true, 'work' => true];
     if (isset($funSet[$cmd])) {
         require_once __DIR__ . '/commands_fun.php';
         if (handleFunAndGeneralCommands($pdo, $cmd, $args, $peerId, $fromId, $ctx, $msg, $myPriority, $isSuper)) {
