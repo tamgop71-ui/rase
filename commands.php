@@ -201,6 +201,7 @@ function getCommandAliasMap(): array {
         'botunban' => 'botunban', 'ботунбан' => 'botunban',
         'maintenance' => 'maintenance', 'техработы' => 'maintenance',
         'sysstats' => 'sysstats', 'сисстата' => 'sysstats', 'ботстата' => 'sysstats',
+        'telemetry' => 'telemetry', 'телеметрия' => 'telemetry', 'статабота' => 'telemetry', 'отчетбота' => 'telemetry',
         'superreq' => 'superreq',
         'anticaps' => 'anticaps', 'антикапс' => 'anticaps', 'капс' => 'anticaps',
         'whois' => 'whois', 'досье' => 'whois', 'проверить' => 'whois',
@@ -292,7 +293,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'listen' => 999, 'chatlist' => 999, 'userchats' => 999, 'ahistory' => 999, 'checkban' => 999,
         'sysban' => 999, 'sysunban' => 999, 'syskick' => 999, 'sysrole' => 999, 'sysnick' => 999,
         'giverub' => 999, 'givesoo' => 999, 'broadcast' => 999, 'botban' => 999, 'botunban' => 999,
-        'maintenance' => 999, 'sysstats' => 999, 'superreq' => 999, 'syslist' => 999, 'sysaudit' => 999, 'sysreset' => 999, 'sysunmute' => 999, 'sysleave' => 999, 'clearcache' => 999, 'koch' => 999,
+        'maintenance' => 999, 'sysstats' => 999, 'telemetry' => 999, 'superreq' => 999, 'syslist' => 999, 'sysaudit' => 999, 'sysreset' => 999, 'sysunmute' => 999, 'sysleave' => 999, 'clearcache' => 999, 'koch' => 999,
     ];
     return $priorities[$cmd] ?? 0;
 }

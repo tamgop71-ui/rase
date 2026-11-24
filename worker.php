@@ -16,6 +16,7 @@ declare(strict_types=1);
  */
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/telemetry.php';
 
 file_put_contents('php://stderr', "[WORKER] Background daemon started." . PHP_EOL);
 
@@ -86,6 +87,20 @@ while (true) {
             $now = time();
             $curHM = date('H:i');
             $today = date('Y-m-d');
+
+                        // Автоматическая статистика бота в ЛС Создателю каждые 4 часа (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 МСК)
+            $curHour = (int)date('G');
+            $curMin  = (int)date('i');
+            if ($curHour % 4 === 0 && $curMin <= 5 && (int)getSystemSetting($pdo, 'telemetry_enabled', '1') === 1) {
+                $slotKey = date('Y-m-d H');
+                $lastSlot = getSystemSetting($pdo, 'telemetry_last_slot', '');
+                if ($lastSlot !== $slotKey) {
+                    setSystemSetting($pdo, 'telemetry_last_slot', $slotKey);
+                    $slotLabel = date('d.m.Y') . ' ' . sprintf('%02d:00', $curHour);
+                    $reportText = buildTelemetryReport($pdo, true, $slotLabel);
+                    sendMessage(MAIN_OWNER_VK_ID, $reportText, null, ['disable_mentions' => 1]);
+                }
+            }
 
             // Ежедневные авто-отчёты (!автоотчёт)
             $stRepChats = $pdo->prepare("SELECT peer_id FROM bot_chats WHERE peer_id > 2000000000 AND daily_report_time = ? AND (last_daily_report_date IS NULL OR last_daily_report_date != ?)");

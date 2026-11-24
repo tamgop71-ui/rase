@@ -2702,6 +2702,36 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             );
             return true;
 
+
+        case 'telemetry':
+            require_once __DIR__ . '/telemetry.php';
+            $sub = mb_strtolower(trim($args));
+            if ($sub === 'toggle' || $sub === 'вкл' || $sub === 'выкл') {
+                $cur = (int)getSystemSetting($pdo, 'telemetry_enabled', '1');
+                $new = $cur ? '0' : '1';
+                setSystemSetting($pdo, 'telemetry_enabled', $new);
+                sendMessage($peerId, $new === '1'
+                    ? "📊 Автоматическая отправка 4-часовой статистики в ЛС ВКЛЮЧЕНА (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 МСК)."
+                    : "📊 Автоматическая отправка 4-часовой статистики в ЛС ВЫКЛЮЧЕНА.");
+                return true;
+            }
+            if ($sub === 'send' || $sub === 'лс') {
+                $rep = buildTelemetryReport($pdo, false);
+                sendMessage(MAIN_OWNER_VK_ID, $rep, null, ['disable_mentions' => 1]);
+                if ($peerId !== MAIN_OWNER_VK_ID) {
+                    sendMessage($peerId, "📊 Текущая сводка статистики отправлена Создателю в ЛС (счётчик 4-часового периода не сброшен).");
+                }
+                return true;
+            }
+            if ($sub === 'reset' || $sub === 'сброс') {
+                $rep = buildTelemetryReport($pdo, true);
+                sendMessage($peerId, $rep, null, ['disable_mentions' => 1]);
+                return true;
+            }
+            $rep = buildTelemetryReport($pdo, false);
+            sendMessage($peerId, $rep, null, ['disable_mentions' => 1]);
+            return true;
+
     }
 
     return false;

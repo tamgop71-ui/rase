@@ -5,6 +5,7 @@ $GLOBALS['_req_start'] = microtime(true);
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/telemetry.php';
 
 // Healthcheck для мониторинга контейнера без нагрузки на БД
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
@@ -186,6 +187,10 @@ if ($data['type'] === 'message_new') {
             }
             exit('ok');
         }
+
+        // 2.1.5. Телеметрия (0 SQL-запросов, запись в /tmp/bot_telemetry.log)
+        $isCmdEvent = ($text !== '' && (bool)preg_match('/^[!\/\.\+\-][\wа-яё]+/iu', $text)) || !empty($msg['payload']);
+        recordTelemetryEvent($peerId, $text, $msg['attachments'] ?? [], $isCmdEvent);
 
         // 2.2. Быстрый контекст (1 SELECT + 1 multi-table UPDATE)
         $ctx = ensureUserAndMember($pdo, $peerId, $fromId, $text, $hasSticker, true);

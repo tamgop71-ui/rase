@@ -217,6 +217,7 @@ function getCommandDescriptions(): array {
         'botban'        => ['show' => 'botban',       'desc' => 'добавляет пользователя в глобальный ЧС команд бота'],
         'botunban'      => ['show' => 'botunban',     'desc' => 'убирает пользователя из глобального ЧС команд бота'],
         'maintenance'   => ['show' => 'maintenance',  'desc' => 'включает или выключает режим технических работ'],
+        'telemetry'     => ['show' => 'telemetry',    'desc' => 'показывает текущую 4-часовую статистику бота или управляет её автоотправкой в ЛС (send/toggle/reset)'],
         'sysstats'      => ['show' => 'sysstats',     'desc' => 'показывает системную статистику бота, БД и памяти'],
         'syslist'       => ['show' => 'syslist',      'desc' => 'показывает список всех пользователей с супер-доступом'],
         'sysaudit'      => ['show' => 'sysaudit',     'desc' => 'показывает ленту последних наказаний админа по всем беседам'],
