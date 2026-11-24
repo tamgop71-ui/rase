@@ -2470,6 +2470,67 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 : "🧠 Команда !ии отключена в этой беседе.");
             return true;
 
+
+        case 'norm':
+            // Использование: !норма (мин_сообщений) (мин_наказаний) (дней)
+            $parts = array_values(array_filter(preg_split('/\s+/', trim($args)), fn($x) => $x !== ''));
+            $minMsgs = isset($parts[0]) && ctype_digit($parts[0]) ? max(0, (int)$parts[0]) : 50;
+            $minActs = isset($parts[1]) && ctype_digit($parts[1]) ? max(0, (int)$parts[1]) : 5;
+            $days    = isset($parts[2]) && ctype_digit($parts[2]) ? max(1, min(90, (int)$parts[2])) : 7;
+
+            $stmt = $pdo->prepare("
+                SELECT m.vk_id, m.role_priority, m.messages_count, m.vacation_until,
+                       (SELECT COUNT(*) FROM bot_punishments p
+                        WHERE p.peer_id = m.peer_id AND p.actor_vk_id = m.vk_id
+                          AND p.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)) AS actions_cnt
+                FROM bot_chat_members m
+                WHERE m.peer_id = ? AND m.role_priority > 0
+                ORDER BY m.role_priority DESC, actions_cnt DESC
+                LIMIT 30
+            ");
+            $stmt->execute([$days, $peerId]);
+            $rows = $stmt->fetchAll();
+
+            if (empty($rows)) {
+                sendMessage($peerId, "📋 В этой беседе нет назначенной администрации.");
+                return true;
+            }
+
+            preloadUsers($pdo, $peerId, array_column($rows, 'vk_id'));
+            $okCnt = 0; $failCnt = 0; $vacCnt = 0;
+            $lines = [
+                "📋 Проверка нормы администрации (за {$days} дн.):",
+                "🎯 Порог: ≥ {$minMsgs} сообщ. и ≥ {$minActs} наказаний",
+                "━━━━━━━━━━━━━━━━━━"
+            ];
+
+            foreach ($rows as $r) {
+                $uid = (int)$r['vk_id'];
+                $rName = getRoleName($pdo, $peerId, (int)$r['role_priority']);
+                $uM = formatUserMention($pdo, $peerId, $uid);
+                $msgs = (int)$r['messages_count'];
+                $acts = (int)$r['actions_cnt'];
+                $inVac = !empty($r['vacation_until']) && strtotime($r['vacation_until']) > time();
+
+                if ($inVac) {
+                    $status = '🏖 Отпуск';
+                    $vacCnt++;
+                } elseif ($msgs >= $minMsgs && $acts >= $minActs) {
+                    $status = '✅ Норма';
+                    $okCnt++;
+                } else {
+                    $status = '❌ Не сдал';
+                    $failCnt++;
+                }
+
+                $lines[] = "{$status} | {$uM} ({$rName}) — ✉️ {$msgs} | 🛡 {$acts}";
+            }
+
+            $lines[] = "━━━━━━━━━━━━━━━━━━";
+            $lines[] = "Итого: ✅ {$okCnt} | ❌ {$failCnt} | 🏖 {$vacCnt}";
+            sendMessage($peerId, implode("\n", $lines), null, ['disable_mentions' => 1]);
+            return true;
+
     }
 
     return false;

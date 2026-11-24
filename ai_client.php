@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /**
- * Модуль ИИ-помощника (!ии / !ai) и ИИ-генератора изображений (!ииген / /aigen).
+ * Модуль ИИ-помощника (!ии / !ai).
  * Работает из коробки через открытый шлюз без регистрации и ключей.
  * При желании можно задать AI_API_KEY (Gemini / Groq / OpenAI-совместимый) для максимальной скорости текста.
  */
@@ -147,77 +147,6 @@ function askAiAssistant(string $question, string $contextText = ''): ?string {
         $rawText = trim($res2['raw']);
         if ($rawText !== '' && !str_starts_with($rawText, '<!DOCTYPE') && !str_starts_with($rawText, '<html')) {
             return cleanAiAnswer($rawText);
-        }
-    }
-
-    return null;
-}
-
-/**
- * Генерация изображения по текстовому описанию (!ииген / /aigen).
- * Возвращает путь к локальному JPEG-файлу в /tmp или null при ошибке.
- */
-function generateAiImage(string $prompt): ?string {
-    @set_time_limit(40);
-
-    $cleanPrompt = trim($prompt);
-    if ($cleanPrompt === '') return null;
-    if (mb_strlen($cleanPrompt) > 500) {
-        $cleanPrompt = mb_substr($cleanPrompt, 0, 500);
-    }
-
-    $seed = random_int(1, 999999999);
-    $imgModel = trim((string)(getenv('AI_IMAGE_MODEL') ?: 'flux'));
-    $encoded = rawurlencode($cleanPrompt);
-
-    $urls = [
-        "https://image.pollinations.ai/prompt/{$encoded}?width=1024&height=1024&seed={$seed}&nologo=true&model=" . urlencode($imgModel),
-        "https://image.pollinations.ai/prompt/{$encoded}?width=768&height=768&seed={$seed}&nologo=true",
-    ];
-
-    foreach ($urls as $url) {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER    => true,
-            CURLOPT_FOLLOWLOCATION    => true,
-            CURLOPT_CONNECTTIMEOUT    => 5,
-            CURLOPT_TIMEOUT           => 25,
-            CURLOPT_NOSIGNAL          => 1,
-            CURLOPT_IPRESOLVE         => CURL_IPRESOLVE_V4,
-            CURLOPT_TCP_NODELAY       => 1,
-            CURLOPT_USERAGENT         => 'RaseRussiaBot',
-        ]);
-        $bytes = curl_exec($ch);
-        $code  = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $ctype = strtolower((string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
-        curl_close($ch);
-
-        if ($bytes === false || $code < 200 || $code >= 300 || strlen((string)$bytes) < 2048) {
-            continue;
-        }
-        if (str_contains($ctype, 'text/html') || str_starts_with(ltrim((string)$bytes), '<')) {
-            continue;
-        }
-
-        $outPath = '/tmp/aigen_' . getmypid() . '_' . random_int(1000, 999999) . '.jpg';
-
-        // Конвертируем через GD в чистый JPEG (на случай если пришёл WebP/PNG)
-        if (extension_loaded('gd')) {
-            $gd = @imagecreatefromstring((string)$bytes);
-            if ($gd !== false) {
-                $ok = imagejpeg($gd, $outPath, 92);
-                imagedestroy($gd);
-                if ($ok && is_file($outPath)) {
-                    return $outPath;
-                }
-            }
-        }
-
-        // Если GD недоступен — сохраняем как есть, если это JPEG
-        if (str_starts_with((string)$bytes, "\xFF\xD8\xFF")) {
-            if (@file_put_contents($outPath, (string)$bytes) !== false) {
-                return $outPath;
-            }
         }
     }
 

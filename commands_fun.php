@@ -65,6 +65,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             } elseif ($cat === 'mod20') {
                 $txt = "🛡 Команды Помощника (приоритет ≥ 20):\n\n"
                      . "• !стата / !досье (!whois) [ID] / !чатинфо / !отчёт / !актив [дни]\n"
+                     . "• !норма [соо] [наказания] (дни) — проверка нормы стаффа (60+)\n"
                      . "• !отпуск [дни] (причина) / !отпуска — реестр отпусков\n"
                      . "• !мут [ID] [мин] (причина) / !унмут [ID]\n"
                      . "• !кик [ID] (причина) — исключить из чата\n"
@@ -113,7 +114,8 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "Префиксы: ! / . + - (на русском и английском)\n\n"
                      . "• !пинг / !статус — скорость отклика и статус бота\n"
                      . "• !ии [вопрос] (!ai) — задать любой вопрос нейросети\n"
-                     . "• !ииген [описание] (/aigen) — сгенерировать картинку нейросетью\n"
+                     . "• !паспорт (!карта) — визуальный паспорт игрока картинкой\n"
+                     . "• !викторина (!quiz) — быстрая викторина с денежной наградой\n"
                      . "• !цитата [текст] | !дем [верх | низ] — цитаты и демотиваторы\n"
                      . "• !напомни [время] [текст] — напоминалка (пример: !напомни 2ч обзвон)\n"
                      . "• !напомни лс [время] [текст] — личное напоминание в ЛС\n"
@@ -1254,42 +1256,83 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             return true;
 
 
-        case 'aigen':
-            if ((int)($ctx['chat']['ai_enabled'] ?? 1) === 0 && !$isSuper) {
-                sendMessage($peerId, "🎨 ИИ-функции (!ии и !ииген) отключены владельцем в этой беседе (!иивкл).");
-                return true;
-            }
-            $prompt = trim($args);
-            if ($prompt === '') {
-                sendMessage($peerId, "🎨 Использование: /aigen [описание картинки] или !ииген [описание]\nПример: !ииген неоновый киберпанк город ночью под дождём");
-                return true;
-            }
-            if (mb_strlen($prompt) > 500) {
-                sendMessage($peerId, "⚠️ Описание слишком длинное (максимум 500 символов).");
-                return true;
-            }
-
-            // Кулдаун через /tmp (0 SQL-запросов)
+        case 'passport':
+            $targetId = extractTargetUser($pdo, $peerId, $msg, $args) ?? $fromId;
             if (!$isSuper) {
-                $cdSec = ((int)$ctx['global']['is_vip'] === 1 || $myPriority >= 40) ? 10 : 20;
-                $cdFile = "/tmp/aigen_cd_{$fromId}.txt";
+                $cdFile = "/tmp/q_cd_{$fromId}.txt";
                 if (is_file($cdFile)) {
                     $diff = time() - (int)@file_get_contents($cdFile);
-                    if ($diff < $cdSec) {
-                        sendMessage($peerId, "⏳ Подождите " . ($cdSec - $diff) . " сек. перед следующей генерацией фото.");
+                    if ($diff < 5) {
+                        sendMessage($peerId, "⏳ Подождите " . (5 - $diff) . " сек. перед генерацией следующего паспорта.");
                         return true;
                     }
                 }
                 @file_put_contents($cdFile, (string)time());
             }
 
-            require_once __DIR__ . '/ai_client.php';
-            require_once __DIR__ . '/quote_generator.php';
+            $tCtx = ($targetId === $fromId) ? $ctx : ensureUserAndMember($pdo, $peerId, $targetId);
+            $g = $tCtx['global'];
+            $m = $tCtx['member'];
 
-            $imgPath = generateAiImage($prompt);
-            $uGen = formatUserMention($pdo, $peerId, $fromId, 'gen');
+            // Получаем свежую аватарку и имя (с кэшем на 10 мин)
+            $uCacheKey = "qprof_{$targetId}";
+            $uProf = cacheGet($uCacheKey, 600);
+            if (!is_array($uProf)) {
+                $vkRes = vkApi('users.get', ['user_ids' => $targetId, 'fields' => 'photo_400_orig,photo_200']);
+                $uData = $vkRes['response'][0] ?? [];
+                $uProf = [
+                    'name'   => trim(($uData['first_name'] ?? $g['first_name']) . ' ' . ($uData['last_name'] ?? $g['last_name'])),
+                    'avatar' => (string)($uData['photo_400_orig'] ?? ($uData['photo_200'] ?? '')),
+                ];
+                cacheSet($uCacheKey, $uProf);
+            }
+
+            $dispName = !empty($m['nickname']) ? (string)$m['nickname'] : ($uProf['name'] ?: trim($g['first_name'] . ' ' . $g['last_name']));
+            $rName = getRoleName($pdo, $peerId, (int)$m['role_priority']) . " ({$m['role_priority']})";
+
+            $countryName = 'Не выбрано';
+            if (!empty($g['country_id'])) {
+                $stC = $pdo->prepare("SELECT name FROM bot_countries WHERE id = ?");
+                $stC->execute([(int)$g['country_id']]);
+                if ($cn = $stC->fetchColumn()) $countryName = (string)$cn;
+            }
+            $clanName = 'Нет';
+            if (!empty($g['clan_id'])) {
+                $stCl = $pdo->prepare("SELECT name FROM bot_clans WHERE id = ?");
+                $stCl->execute([(int)$g['clan_id']]);
+                if ($cln = $stCl->fetchColumn()) $clanName = (string)$cln;
+            }
+            $marriageStr = 'Холост / Не замужем';
+            if (!empty($g['spouse_vk_id'])) {
+                $spId = (int)$g['spouse_vk_id'];
+                $stSp = $pdo->prepare("SELECT u.first_name, u.last_name, m.nickname FROM bot_users u LEFT JOIN bot_chat_members m ON m.vk_id = u.vk_id AND m.peer_id = ? WHERE u.vk_id = ?");
+                $stSp->execute([$peerId, $spId]);
+                if ($spRow = $stSp->fetch()) {
+                    $spName = !empty($spRow['nickname']) ? $spRow['nickname'] : trim(($spRow['first_name'] ?? '') . ' ' . ($spRow['last_name'] ?? ''));
+                    if ($spName !== '') $marriageStr = "В браке (" . $spName . ")";
+                }
+            }
+
+            require_once __DIR__ . '/quote_generator.php';
+            $imgPath = generatePassportImage([
+                'vk_id'      => $targetId,
+                'name'       => $dispName,
+                'avatar_url' => $uProf['avatar'] ?? '',
+                'role'       => $rName,
+                'is_vip'     => ((int)$g['is_vip'] === 1),
+                'is_super'   => ((int)$g['is_superadmin'] === 1 || hasSuperAccess($pdo, $targetId)),
+                'cash'       => formatMoney((int)$g['balance']),
+                'bank'       => formatMoney((int)$g['bank_balance']),
+                'clan'       => $clanName,
+                'country'    => $countryName,
+                'messages'   => number_format((int)$m['messages_count'], 0, '.', ' ') . " (всего " . number_format((int)$g['total_messages'], 0, '.', ' ') . ")",
+                'reputation' => (string)$g['reputation'] . " ед.",
+                'marriage'   => $marriageStr,
+                'reg_date'   => date('d.m.Y', strtotime($m['joined_at'] ?? 'now')),
+            ]);
+
             if ($imgPath === null) {
-                sendMessage($peerId, "⚠️ Не удалось сгенерировать фото для {$uGen} — сервис генерации перегружен. Попробуйте ещё раз через пару секунд.", null, ['disable_mentions' => 1]);
+                sendMessage($peerId, "⚠️ Не удалось сгенерировать паспорт. Проверьте, что контейнер собран с PHP GD.");
                 return true;
             }
 
@@ -1298,18 +1341,135 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
 
             if (empty($upRes['attachment'])) {
                 $errDetail = !empty($upRes['error']) ? ("\nПричина: " . $upRes['error']) : "";
-                sendMessage($peerId, "⚠️ Не удалось загрузить сгенерированное фото в ВКонтакте.{$errDetail}");
+                sendMessage($peerId, "⚠️ Не удалось загрузить паспорт в ВКонтакте.{$errDetail}");
                 return true;
             }
 
-            $kb = null;
-            if (mb_strlen($prompt) <= 150) {
-                $kb = makeInlineKeyboard([[
-                    ['label' => '🔄 Ещё вариант', 'payload' => ['cmd' => '!aigen ' . $prompt], 'color' => 'primary']
-                ]]);
+            sendMessage($peerId, "🪪 Паспорт " . formatUserMention($pdo, $peerId, $targetId, 'gen'), null, ['attachment' => $upRes['attachment'], 'disable_mentions' => 1]);
+            return true;
+
+        case 'quiz':
+            $quizFile = "/tmp/quiz_{$peerId}.json";
+            $raw = trim($args);
+
+            // Обработка нажатия ответа: !quiz ans [qid] [idx]
+            if (preg_match('/^ans\s+(\d+)\s+(\d+)$/i', $raw, $m)) {
+                $qid = (int)$m[1];
+                $pick = (int)$m[2];
+                if (!is_file($quizFile)) {
+                    sendMessage($peerId, "⏳ Эта викторина уже завершена. Запустите новую: !викторина");
+                    return true;
+                }
+                $state = json_decode((string)@file_get_contents($quizFile), true);
+                if (!is_array($state) || (int)($state['id'] ?? 0) !== $qid || !empty($state['solved'])) {
+                    sendMessage($peerId, "⏳ На этот вопрос уже ответили! Запустите новый: !викторина");
+                    return true;
+                }
+                if (time() > (int)($state['expires'] ?? 0)) {
+                    @unlink($quizFile);
+                    sendMessage($peerId, "⏰ Время на ответ вышло! Правильный ответ был: «{$state['opts'][$state['correct']]}».\nЗапустите новый вопрос: !викторина");
+                    return true;
+                }
+
+                $tried = (array)($state['tried'] ?? []);
+                if (in_array($fromId, $tried, true)) {
+                    sendMessage($peerId, "⚠️ " . formatUserMention($pdo, $peerId, $fromId) . ", вы уже пробовали ответить на этот вопрос!", null, ['disable_mentions' => 1]);
+                    return true;
+                }
+
+                if ($pick === (int)$state['correct']) {
+                    $state['solved'] = true;
+                    @unlink($quizFile);
+                    $reward = (int)$state['reward'];
+                    $pdo->prepare("UPDATE bot_users SET balance = balance + ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$reward, $fromId]);
+                    $uWin = formatUserMention($pdo, $peerId, $fromId);
+                    $kbNext = makeInlineKeyboard([[
+                        ['label' => '▶ Следующий вопрос', 'payload' => ['cmd' => '!викторина'], 'color' => 'primary']
+                    ]]);
+                    sendMessage($peerId, "🎉 Верно! {$uWin} первым(ой) ответил(а) правильно («{$state['opts'][$pick]}») и получил(а) " . formatMoney($reward) . "!", $kbNext);
+                } else {
+                    $tried[] = $fromId;
+                    $state['tried'] = $tried;
+                    $tmp = $quizFile . '.' . getmypid() . '.tmp';
+                    if (@file_put_contents($tmp, json_encode($state, JSON_UNESCAPED_UNICODE)) !== false) {
+                        @rename($tmp, $quizFile);
+                    }
+                    sendMessage($peerId, "❌ " . formatUserMention($pdo, $peerId, $fromId) . ", мимо! Попробуй в следующем раунде.", null, ['disable_mentions' => 1]);
+                }
+                return true;
             }
-            $shortPrompt = mb_strlen($prompt) > 120 ? (mb_substr($prompt, 0, 117) . '...') : $prompt;
-            sendMessage($peerId, "🎨 ИИ-арт для {$uGen}\n📝 Запрос: {$shortPrompt}", $kb, ['attachment' => $upRes['attachment'], 'disable_mentions' => 1]);
+
+            // Проверяем, нет ли уже активной викторины в чате
+            if (is_file($quizFile)) {
+                $cur = json_decode((string)@file_get_contents($quizFile), true);
+                if (is_array($cur) && empty($cur['solved']) && time() < (int)($cur['expires'] ?? 0)) {
+                    $rem = (int)$cur['expires'] - time();
+                    sendMessage($peerId, "❓ В беседе уже идёт викторина (осталось {$rem} сек.)! Отвечайте на кнопки выше.");
+                    return true;
+                }
+            }
+
+            static $quizBank = [
+                ['q' => 'Что в CRMP/RP означает термин DM (ДМ)?', 'opts' => ['Убийство без причины', 'Убийство машиной', 'Выход при аресте', 'Стрельба на спавне'], 'a' => 0],
+                ['q' => 'Что означает RP-термин DB (ДБ)?', 'opts' => ['Двойной бан', 'Убийство/наезд транспортом', 'Слив фракции', 'Передача аккаунта'], 'a' => 1],
+                ['q' => 'Что означает термин SK (СК) в RP?', 'opts' => ['Убийство при появлении (на спавне)', 'Скоростная езда', 'Смена ника', 'Секретный код'], 'a' => 0],
+                ['q' => 'Что означает термин TK (ТК) в RP?', 'opts' => ['Убийство союзника из своей фракции', 'Тюнинг-клуб', 'Телепорт по карте', 'Торговый квартал'], 'a' => 0],
+                ['q' => 'Что означает термин PG (ПГ) в RP?', 'opts' => ['Поиск груза', 'Воображение из себя супергероя', 'Передача денег', 'Повторная жалоба'], 'a' => 1],
+                ['q' => 'Что означает термин MG (МГ) в RP?', 'opts' => ['Использование OOC-информации в IC-чате', 'Массовая гонка', 'Мини-игра', 'Магазин оружия'], 'a' => 0],
+                ['q' => 'Что означает термин RK (РК) в RP?', 'opts' => ['Возвращение на место смерти / месть', 'Ремонт кузова', 'Розыск криминала', 'Реклама клана'], 'a' => 0],
+                ['q' => 'Что такое ЗЗ (Зелёная Зона) на сервере?', 'opts' => ['Зона, где запрещено нанесение урона', 'Место спавна ОПГ', 'Территория авторынка', 'Штрафстоянка'], 'a' => 0],
+                ['q' => 'Что означает OOC-чат в RP?', 'opts' => ['Нон-РП чат (информация из реального мира)', 'Чат организации', 'Чат семьи', 'Голосовой чат'], 'a' => 0],
+                ['q' => 'Что означает IC-информация в RP?', 'opts' => ['Информация внутри игрового мира персонажа', 'Информация с форума', 'Личная переписка в ВК', 'Логи сервера'], 'a' => 0],
+                ['q' => 'Сколько планет в Солнечной системе?', 'opts' => ['7', '8', '9', '10'], 'a' => 1],
+                ['q' => 'Какая самая длинная река в мире (по большинству измерений)?', 'opts' => ['Волга', 'Амазонка', 'Янцзы', 'Миссисипи'], 'a' => 1],
+                ['q' => 'В каком году состоялся первый полёт человека в космос?', 'opts' => ['1957', '1961', '1965', '1969'], 'a' => 1],
+                ['q' => 'Какой химический элемент обозначается символом Au?', 'opts' => ['Серебро', 'Золото', 'Алюминий', 'Аргон'], 'a' => 1],
+                ['q' => 'Какая страна является самой большой по площади в мире?', 'opts' => ['Канада', 'Китай', 'Россия', 'США'], 'a' => 2],
+                ['q' => 'Сколько бит содержится в одном байте?', 'opts' => ['4', '8', '16', '32'], 'a' => 1],
+                ['q' => 'Какой океан самый большой на Земле?', 'opts' => ['Атлантический', 'Индийский', 'Тихий', 'Северный Ледовитый'], 'a' => 2],
+                ['q' => 'Столица Японии — это...', 'opts' => ['Осака', 'Киото', 'Токио', 'Сеул'], 'a' => 2],
+                ['q' => 'Сколько секунд в одном часе?', 'opts' => ['600', '1800', '3600', '7200'], 'a' => 2],
+                ['q' => 'Какой газ преобладает в атмосфере Земли?', 'opts' => ['Кислород', 'Азот', 'Углекислый газ', 'Водород'], 'a' => 1],
+                ['q' => 'Какой самый твёрдый природный минерал?', 'opts' => ['Кварц', 'Рубин', 'Алмаз', 'Титан'], 'a' => 2],
+                ['q' => 'Сколько градусов в прямом угле?', 'opts' => ['45', '90', '180', '360'], 'a' => 1],
+                ['q' => 'Кто написал роман «Война и мир»?', 'opts' => ['Ф. Достоевский', 'Л. Толстой', 'А. Пушкин', 'А. Чехов'], 'a' => 1],
+                ['q' => 'Какая валюта используется в Японии?', 'opts' => ['Юань', 'Вона', 'Иена', 'Бат'], 'a' => 2],
+            ];
+
+            $item = $quizBank[array_rand($quizBank)];
+            $opts = $item['opts'];
+            $correctText = $opts[$item['a']];
+            shuffle($opts);
+            $correctIdx = array_search($correctText, $opts, true);
+            $qid = random_int(10000, 99999);
+            $reward = random_int(15, 30) * 100;
+
+            $state = [
+                'id'      => $qid,
+                'opts'    => $opts,
+                'correct' => (int)$correctIdx,
+                'reward'  => $reward,
+                'expires' => time() + 60,
+                'solved'  => false,
+                'tried'   => [],
+            ];
+            $tmp = $quizFile . '.' . getmypid() . '.tmp';
+            if (@file_put_contents($tmp, json_encode($state, JSON_UNESCAPED_UNICODE)) !== false) {
+                @rename($tmp, $quizFile);
+            }
+
+            $kb = makeInlineKeyboard([
+                [
+                    ['label' => 'A) ' . $opts[0], 'payload' => ['cmd' => "!quiz ans {$qid} 0"], 'color' => 'primary'],
+                    ['label' => 'B) ' . $opts[1], 'payload' => ['cmd' => "!quiz ans {$qid} 1"], 'color' => 'primary']
+                ],
+                [
+                    ['label' => 'C) ' . $opts[2], 'payload' => ['cmd' => "!quiz ans {$qid} 2"], 'color' => 'primary'],
+                    ['label' => 'D) ' . $opts[3], 'payload' => ['cmd' => "!quiz ans {$qid} 3"], 'color' => 'primary']
+                ]
+            ]);
+
+            sendMessage($peerId, "🧠 ВИКТОРИНА RASE RUSSIA!\n━━━━━━━━━━━━━━━━━━\n❓ {$item['q']}\n\n💰 Награда первому правильно ответившему: " . formatMoney($reward) . "\n⏳ Время: 60 сек.", $kb);
             return true;
 
         case 'dem':

@@ -533,3 +533,151 @@ function extractPhotoUrlFromMessage(array $msg): ?string {
     }
     return null;
 }
+
+/**
+ * Генератор визуального паспорта игрока (!паспорт / !карта) в стиле тёмного CRMP UI на PHP GD
+ */
+function generatePassportImage(array $info): ?string {
+    if (!extension_loaded('gd') || !function_exists('imagettftext')) {
+        return null;
+    }
+
+    $fontBold = quoteFindFont([
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf',
+    ]);
+    $fontReg = quoteFindFont([
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/dejavu/DejaVuSans.ttf',
+    ]) ?? $fontBold;
+
+    if ($fontBold === null) return null;
+
+    $w = 1200;
+    $h = 630;
+    $img = imagecreatetruecolor($w, $h);
+    imagealphablending($img, true);
+    imagesavealpha($img, true);
+
+    // 1. Тёмный премиальный градиентный фон (глубокий фиолетово-графитовый)
+    for ($y = 0; $y < $h; $y++) {
+        $t = $y / ($h - 1);
+        $r = (int)round(22 + 12 * $t);
+        $g = (int)round(14 + 6 * $t);
+        $b = (int)round(36 + 18 * $t);
+        imageline($img, 0, $y, $w, $y, imagecolorallocate($img, $r, $g, $b));
+    }
+
+    // Мягкие акценты свечения
+    quoteDrawSoftGlow($img, 180, 140, 320, 120, 28, 165, 14, 121);
+    quoteDrawSoftGlow($img, 1020, 520, 360, 20, 145, 115, 14, 122);
+
+    // 2. Внешняя рамка карточки и полупрозрачная панель
+    $panelBg   = imagecolorallocatealpha($img, 16, 18, 28, 28);
+    $panelEdge = imagecolorallocatealpha($img, 145, 95, 225, 65);
+    $cardBg    = imagecolorallocatealpha($img, 28, 30, 46, 32);
+    $cardEdge  = imagecolorallocatealpha($img, 120, 130, 165, 85);
+    $white     = imagecolorallocate($img, 255, 255, 255);
+    $muted     = imagecolorallocate($img, 168, 175, 198);
+    $accent    = imagecolorallocate($img, 185, 125, 255);
+    $gold      = imagecolorallocate($img, 255, 206, 86);
+    $emerald   = imagecolorallocate($img, 74, 222, 128);
+    $shadow    = imagecolorallocatealpha($img, 0, 0, 0, 70);
+
+    imagefilledrectangle($img, 36, 36, $w - 36, $h - 36, $panelBg);
+    imagerectangle($img, 36, 36, $w - 36, $h - 36, $panelEdge);
+    imagerectangle($img, 37, 37, $w - 37, $h - 37, $panelEdge);
+
+    // 3. Верхняя шапка паспорта
+    imagettftext($img, 15, 0, 66, 78, $accent, $fontBold, "RASE RUSSIA  |  ПАСПОРТ УЧАСТНИКА");
+    $idLabel = "ID: " . (int)($info['vk_id'] ?? 0);
+    $idBox = imagettfbbox(15, 0, $fontBold, $idLabel);
+    $idW = abs($idBox[2] - $idBox[0]);
+    imagettftext($img, 15, 0, $w - 66 - $idW, 78, $muted, $fontBold, $idLabel);
+    imageline($img, 64, 96, $w - 64, 96, $cardEdge);
+
+    // 4. Круглая аватарка слева + декоративное кольцо
+    $avSize = 230;
+    $avX = 78;
+    $avY = 140;
+    $ringCol = !empty($info['is_vip']) ? $gold : $accent;
+    imagefilledellipse($img, $avX + (int)($avSize / 2), $avY + (int)($avSize / 2), $avSize + 12, $avSize + 12, $ringCol);
+
+    $avatarBytes = !empty($info['avatar_url']) ? quoteDownloadBinary((string)$info['avatar_url']) : null;
+    $rawName = (string)($info['name'] ?? 'Игрок');
+    $cleanName = trim(preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', $rawName));
+    if ($cleanName === '') $cleanName = 'Игрок';
+
+    quoteDrawCircularAvatar($img, $avatarBytes, $avX, $avY, $avSize, $cleanName, $fontBold);
+
+    // Бейдж роли под аватаркой
+    $roleText = trim(preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', (string)($info['role'] ?? 'Участник')));
+    if (mb_strlen($roleText) > 22) $roleText = mb_substr($roleText, 0, 21) . '…';
+    imagefilledrectangle($img, 68, 400, 318, 446, $cardBg);
+    imagerectangle($img, 68, 400, 318, 446, $ringCol);
+    $rBox = imagettfbbox(14, 0, $fontBold, $roleText);
+    $rW = abs($rBox[2] - $rBox[0]);
+    imagettftext($img, 14, 0, 68 + (int)((250 - $rW) / 2), 429, $white, $fontBold, $roleText);
+
+    // VIP / Статус под ролью
+    $statusText = !empty($info['is_super']) ? "СУПЕР-ДОСТУП" : (!empty($info['is_vip']) ? "VIP СТАТУС" : "УЧАСТНИК ЧАТА");
+    $statusCol  = (!empty($info['is_super']) || !empty($info['is_vip'])) ? $gold : $muted;
+    $sBox = imagettfbbox(13, 0, $fontBold, $statusText);
+    $sW = abs($sBox[2] - $sBox[0]);
+    imagettftext($img, 13, 0, 68 + (int)((250 - $sW) / 2), 478, $statusCol, $fontBold, $statusText);
+
+    // Дата регистрации внизу слева
+    $regStr = "В беседе с " . (string)($info['reg_date'] ?? date('d.m.Y'));
+    $rgBox = imagettfbbox(12, 0, $fontReg, $regStr);
+    $rgW = abs($rgBox[2] - $rgBox[0]);
+    imagettftext($img, 12, 0, 68 + (int)((250 - $rgW) / 2), 515, $muted, $fontReg, $regStr);
+
+    // 5. Правая колонка: Имя + 6 аккуратных статистических плиток (2 столбца x 3 ряда)
+    $dispName = mb_strlen($cleanName) > 26 ? (mb_substr($cleanName, 0, 25) . '…') : $cleanName;
+    imagettftext($img, 30, 0, 362, 168, $shadow, $fontBold, $dispName);
+    imagettftext($img, 30, 0, 360, 166, $white, $fontBold, $dispName);
+
+    $cleanStr = function (string $val, int $max = 22): string {
+        $v = trim(preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', $val));
+        if ($v === '') return '—';
+        return mb_strlen($v) > $max ? (mb_substr($v, 0, $max - 1) . '…') : $v;
+    };
+
+    $tiles = [
+        ['label' => 'НАЛИЧНЫЕ',   'val' => $cleanStr((string)($info['cash'] ?? '0 ₽'), 20),       'col' => $emerald],
+        ['label' => 'В БАНКЕ',    'val' => $cleanStr((string)($info['bank'] ?? '0 ₽'), 20),       'col' => $emerald],
+        ['label' => 'СЕМЬЯ/КЛАН', 'val' => $cleanStr((string)($info['clan'] ?? 'Нет'), 22),       'col' => $white],
+        ['label' => 'ГРАЖДАНСТВО','val' => $cleanStr((string)($info['country'] ?? 'Нет'), 22),    'col' => $white],
+        ['label' => 'СООБЩЕНИЯ',  'val' => $cleanStr((string)($info['messages'] ?? '0'), 22),     'col' => $accent],
+        ['label' => 'РЕПУТАЦИЯ',  'val' => $cleanStr((string)($info['reputation'] ?? '0'), 20),   'col' => $gold],
+    ];
+
+    $startX = 360;
+    $startY = 200;
+    $tileW = 372;
+    $tileH = 98;
+    $gapX = 24;
+    $gapY = 20;
+
+    foreach ($tiles as $idx => $tile) {
+        $colIdx = $idx % 2;
+        $rowIdx = (int)floor($idx / 2);
+        $tx = $startX + $colIdx * ($tileW + $gapX);
+        $ty = $startY + $rowIdx * ($tileH + $gapY);
+
+        imagefilledrectangle($img, $tx, $ty, $tx + $tileW, $ty + $tileH, $cardBg);
+        imagerectangle($img, $tx, $ty, $tx + $tileW, $ty + $tileH, $cardEdge);
+
+        imagettftext($img, 12, 0, $tx + 20, $ty + 32, $muted, $fontBold, $tile['label']);
+        imagettftext($img, 20, 0, $tx + 20, $ty + 72, $tile['col'], $fontBold, $tile['val']);
+    }
+
+    // Нижняя строка: брак
+    $marriage = $cleanStr((string)($info['marriage'] ?? 'Холост / Не замужем'), 46);
+    imagettftext($img, 13, 0, 360, 568, $muted, $fontReg, "Семейное положение: {$marriage}");
+
+    $outPath = '/tmp/pass_' . getmypid() . '_' . random_int(1000, 999999) . '.jpg';
+    $ok = imagejpeg($img, $outPath, 92);
+    imagedestroy($img);
+    return $ok ? $outPath : null;
+}

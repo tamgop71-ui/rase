@@ -231,7 +231,9 @@ function getCommandAliasMap(): array {
         'ии' => 'ai', 'ai' => 'ai', 'нейросеть' => 'ai', 'gpt' => 'ai', 'спроси' => 'ai',
         'иивкл' => 'aitoggle', 'aitoggle' => 'aitoggle',
         'цитата' => 'quote', 'цит' => 'quote', 'quote' => 'quote', 'q' => 'quote',
-        'aigen' => 'aigen', 'ииген' => 'aigen', 'иифото' => 'aigen', 'сгенерируй' => 'aigen', 'арт' => 'aigen', 'genimg' => 'aigen',
+        'паспорт' => 'passport', 'карта' => 'passport', 'passport' => 'passport',
+        'викторина' => 'quiz', 'квиз' => 'quiz', 'quiz' => 'quiz',
+        'норма' => 'norm', 'norm' => 'norm', 'нормаадм' => 'norm',
         'дем' => 'dem', 'демотиватор' => 'dem', 'dem' => 'dem',
 
 
@@ -267,7 +269,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'findnick' => 40, 'gzov' => 40, 'gkick' => 40, 'gsnick' => 40, 'grnick' => 40,
 
         // >= 60 (Администратор)
-        'grole' => 60, 'temprole' => 60, 'announce' => 60, 'masskick' => 60, 'ghelper' => 60, 'gmoder' => 60, 'moder' => 60, 'gban' => 60,
+        'grole' => 60, 'temprole' => 60, 'announce' => 60, 'masskick' => 60, 'norm' => 60, 'ghelper' => 60, 'gmoder' => 60, 'moder' => 60, 'gban' => 60,
         'gunban' => 60, 'delmsg' => 60, 'gm' => 60, 'removegm' => 60, 'gms' => 60, 'reports' => 60,
 
         // >= 80 (Главный администратор)
@@ -344,7 +346,7 @@ function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int
         'marry' => true, 'divorce' => true, 'marriages' => true, 'kiss' => true, 'hug' => true,
         'try' => true, 'iznas' => true, 'minet' => true, 'beer' => true, 'roll' => true,
         'ball' => true, 'choose' => true, 'rep' => true, 'case' => true, 'promo' => true,
-        'quests' => true, 'shop' => true, 'coin' => true, 'clan' => true, 'clans' => true
+        'quests' => true, 'shop' => true, 'coin' => true, 'clan' => true, 'clans' => true, 'quiz' => true
     ];
     if (isset($gameCmds[$cmd]) && (int)($ctx['chat']['games_enabled'] ?? 1) === 0 && !$isSuper) {
         sendMessage($peerId, "🎮 Экономика и развлекательные команды отключены владельцем (!games).");
@@ -352,7 +354,7 @@ function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int
     }
 
     // Ленивая подгрузка: загружаем ТОЛЬКО тот модуль (fun или mod), который нужен для этой команды
-    static $funSet = ['admins' => true, 'afk' => true, 'ai' => true, 'aigen' => true, 'atop' => true, 'ball' => true, 'bank' => true, 'beer' => true, 'bonus' => true, 'case' => true, 'casino' => true, 'choose' => true, 'citizenship' => true, 'clan' => true, 'clans' => true, 'coin' => true, 'countries' => true, 'dem' => true, 'deposit' => true, 'divorce' => true, 'duel' => true, 'emoji' => true, 'enick' => true, 'giveaway' => true, 'help' => true, 'hug' => true, 'iznas' => true, 'kiss' => true, 'marriages' => true, 'marry' => true, 'mention_off' => true, 'mention_on' => true, 'mentions' => true, 'minet' => true, 'mycountry' => true, 'online' => true, 'pay' => true, 'ping' => true, 'poll' => true, 'profile' => true, 'promo' => true, 'quests' => true, 'quote' => true, 'remind' => true, 'reminders' => true, 'rep' => true, 'rob' => true, 'roles' => true, 'roll' => true, 'roulette' => true, 'rules' => true, 'shop' => true, 'slots' => true, 'start' => true, 'stickers' => true, 'thereid' => true, 'top' => true, 'try' => true, 'withdraw' => true, 'work' => true];
+    static $funSet = ['admins' => true, 'afk' => true, 'ai' => true, 'atop' => true, 'ball' => true, 'bank' => true, 'beer' => true, 'bonus' => true, 'case' => true, 'casino' => true, 'choose' => true, 'citizenship' => true, 'clan' => true, 'clans' => true, 'coin' => true, 'countries' => true, 'dem' => true, 'deposit' => true, 'divorce' => true, 'duel' => true, 'emoji' => true, 'enick' => true, 'giveaway' => true, 'help' => true, 'hug' => true, 'iznas' => true, 'kiss' => true, 'marriages' => true, 'marry' => true, 'mention_off' => true, 'mention_on' => true, 'mentions' => true, 'minet' => true, 'mycountry' => true, 'online' => true, 'passport' => true, 'pay' => true, 'ping' => true, 'poll' => true, 'profile' => true, 'promo' => true, 'quests' => true, 'quiz' => true, 'quote' => true, 'remind' => true, 'reminders' => true, 'rep' => true, 'rob' => true, 'roles' => true, 'roll' => true, 'roulette' => true, 'rules' => true, 'shop' => true, 'slots' => true, 'start' => true, 'stickers' => true, 'thereid' => true, 'top' => true, 'try' => true, 'withdraw' => true, 'work' => true];
     if (isset($funSet[$cmd])) {
         require_once __DIR__ . '/commands_fun.php';
         if (handleFunAndGeneralCommands($pdo, $cmd, $args, $peerId, $fromId, $ctx, $msg, $myPriority, $isSuper)) {
