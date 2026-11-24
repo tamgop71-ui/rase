@@ -395,3 +395,141 @@ function uploadPhotoToVkMessage(int $peerId, string $filePath): array {
     }
     return ['attachment' => $att, 'error' => null];
 }
+
+/**
+ * Генератор классического мема-демотиватора (!дем [верх] | [низ]) на PHP GD
+ */
+function generateDemotivatorImage(string $photoUrl, string $topText, string $bottomText = ''): ?string {
+    if (!extension_loaded('gd') || !function_exists('imagettftext')) {
+        return null;
+    }
+
+    $fontSerif = quoteFindFont([
+        '/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+    ]);
+    $fontSans = quoteFindFont([
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+    ]) ?? $fontSerif;
+
+    if ($fontSerif === null) return null;
+
+    $bytes = quoteDownloadBinary($photoUrl);
+    if ($bytes === null) return null;
+    $src = @imagecreatefromstring($bytes);
+    if ($src === false) return null;
+
+    $sw = imagesx($src);
+    $sh = imagesy($src);
+
+    // Масштабируем исходное фото под рамку 840px по ширине
+    $boxW = 840;
+    $boxH = (int)round($sh * ($boxW / max(1, $sw)));
+    $boxH = max(320, min(840, $boxH));
+
+    $padX = 80;
+    $padTop = 65;
+    $canvasW = $boxW + ($padX * 2);
+
+    $cleanTop = trim(preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', $topText));
+    $cleanBot = trim(preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', $bottomText));
+    if ($cleanTop === '') $cleanTop = ' ';
+
+    $topSize = 44.0;
+    $topLines = quoteWrapText($cleanTop, $fontSerif, $topSize, $canvasW - 100);
+    if (count($topLines) > 3) {
+        $topSize = 34.0;
+        $topLines = array_slice(quoteWrapText($cleanTop, $fontSerif, $topSize, $canvasW - 100), 0, 4);
+    }
+    $topLineH = (int)round($topSize * 1.35);
+
+    $botSize = 24.0;
+    $botLines = $cleanBot !== '' ? array_slice(quoteWrapText($cleanBot, $fontSans, $botSize, $canvasW - 120), 0, 4) : [];
+    $botLineH = (int)round($botSize * 1.4);
+
+    $textBlockH = (count($topLines) * $topLineH) + (!empty($botLines) ? (22 + count($botLines) * $botLineH) : 0);
+    $canvasH = $padTop + $boxH + 45 + $textBlockH + 55;
+
+    $img = imagecreatetruecolor($canvasW, $canvasH);
+    $black = imagecolorallocate($img, 0, 0, 0);
+    $white = imagecolorallocate($img, 255, 255, 255);
+    $softWhite = imagecolorallocate($img, 232, 232, 232);
+    imagefilledrectangle($img, 0, 0, $canvasW, $canvasH, $black);
+
+    // Белая тонкая двойная рамка вокруг картинки
+    imagerectangle($img, $padX - 8, $padTop - 8, $padX + $boxW + 7, $padTop + $boxH + 7, $white);
+    imagerectangle($img, $padX - 7, $padTop - 7, $padX + $boxW + 6, $padTop + $boxH + 6, $white);
+
+    // Вставляем исходное фото с сохранением пропорций (cover)
+    $srcRatio = $sw / max(1, $sh);
+    $dstRatio = $boxW / max(1, $boxH);
+    if ($srcRatio > $dstRatio) {
+        $cropH = $sh;
+        $cropW = (int)round($sh * $dstRatio);
+        $cropX = (int)floor(($sw - $cropW) / 2);
+        $cropY = 0;
+    } else {
+        $cropW = $sw;
+        $cropH = (int)round($sw / $dstRatio);
+        $cropX = 0;
+        $cropY = (int)floor(($sh - $cropH) / 2);
+    }
+    imagecopyresampled($img, $src, $padX, $padTop, $cropX, $cropY, $boxW, $boxH, $cropW, $cropH);
+    imagedestroy($src);
+
+    // Рисуем верхний текст
+    $curY = $padTop + $boxH + 42 + (int)round($topSize);
+    foreach ($topLines as $line) {
+        $b = imagettfbbox($topSize, 0, $fontSerif, $line);
+        $lw = abs($b[2] - $b[0]);
+        $lx = (int)round(($canvasW - $lw) / 2);
+        imagettftext($img, $topSize, 0, $lx, $curY, $white, $fontSerif, $line);
+        $curY += $topLineH;
+    }
+
+    // Рисуем нижний подзаголовок
+    if (!empty($botLines)) {
+        $curY += 10;
+        foreach ($botLines as $line) {
+            $b = imagettfbbox($botSize, 0, $fontSans, $line);
+            $lw = abs($b[2] - $b[0]);
+            $lx = (int)round(($canvasW - $lw) / 2);
+            imagettftext($img, $botSize, 0, $lx, $curY, $softWhite, $fontSans, $line);
+            $curY += $botLineH;
+        }
+    }
+
+    $outPath = '/tmp/dem_' . getmypid() . '_' . random_int(1000, 999999) . '.jpg';
+    $ok = imagejpeg($img, $outPath, 92);
+    imagedestroy($img);
+    return $ok ? $outPath : null;
+}
+
+/**
+ * Извлечение URL наибольшего фото из вложений сообщения (или ответа/пересланного)
+ */
+function extractPhotoUrlFromMessage(array $msg): ?string {
+    $sources = [$msg];
+    if (!empty($msg['reply_message'])) $sources[] = $msg['reply_message'];
+    if (!empty($msg['fwd_messages'][0])) $sources[] = $msg['fwd_messages'][0];
+
+    foreach ($sources as $src) {
+        foreach (($src['attachments'] ?? []) as $att) {
+            if (($att['type'] ?? '') === 'photo' && !empty($att['photo']['sizes'])) {
+                $bestUrl = null;
+                $bestArea = -1;
+                foreach ($att['photo']['sizes'] as $sz) {
+                    $area = (int)($sz['width'] ?? 0) * (int)($sz['height'] ?? 0);
+                    if ($area > $bestArea && !empty($sz['url'])) {
+                        $bestArea = $area;
+                        $bestUrl = (string)$sz['url'];
+                    }
+                }
+                if ($bestUrl !== null) return $bestUrl;
+            }
+        }
+    }
+    return null;
+}

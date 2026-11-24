@@ -113,7 +113,8 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "Префиксы: ! / . + - (на русском и английском)\n\n"
                      . "• !пинг / !статус — скорость отклика и статус бота\n"
                      . "• !ии [вопрос] (!ai) — задать любой вопрос нейросети\n"
-                     . "• !цитата [текст] (!quote) — красивая картинка-цитата (можно ответом)\n"
+                     . "• !ииген [описание] (/aigen) — сгенерировать картинку нейросетью\n"
+                     . "• !цитата [текст] | !дем [верх | низ] — цитаты и демотиваторы\n"
                      . "• !напомни [время] [текст] — напоминалка (пример: !напомни 2ч обзвон)\n"
                      . "• !напомни лс [время] [текст] — личное напоминание в ЛС\n"
                      . "• !напоминания — список ваших активных напоминаний\n"
@@ -1177,7 +1178,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 sendMessage($peerId, "⚠️ {$uM}, нейросеть сейчас перегружена и не успела ответить. Попробуйте повторить вопрос через пару секунд.");
                 return true;
             }
-            sendMessage($peerId, "🤖 Ответ ИИ для " . formatUserMention($pdo, $peerId, $fromId, 'gen') . ":\n\n{$answer}", null, ['disable_mentions' => 1]);
+            sendLongMessage($peerId, "🤖 Ответ ИИ для " . formatUserMention($pdo, $peerId, $fromId, 'gen') . ":\n\n{$answer}", null, ['disable_mentions' => 1]);
             return true;
 
 
@@ -1246,6 +1247,132 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             if (empty($upRes['attachment'])) {
                 $errDetail = !empty($upRes['error']) ? ("\nПричина: " . $upRes['error']) : "";
                 sendMessage($peerId, "⚠️ Не удалось загрузить картинку в ВКонтакте.{$errDetail}");
+                return true;
+            }
+
+            sendMessage($peerId, "", null, ['attachment' => $upRes['attachment']]);
+            return true;
+
+
+        case 'aigen':
+            if ((int)($ctx['chat']['ai_enabled'] ?? 1) === 0 && !$isSuper) {
+                sendMessage($peerId, "🎨 ИИ-функции (!ии и !ииген) отключены владельцем в этой беседе (!иивкл).");
+                return true;
+            }
+            $prompt = trim($args);
+            if ($prompt === '') {
+                sendMessage($peerId, "🎨 Использование: /aigen [описание картинки] или !ииген [описание]\nПример: !ииген неоновый киберпанк город ночью под дождём");
+                return true;
+            }
+            if (mb_strlen($prompt) > 500) {
+                sendMessage($peerId, "⚠️ Описание слишком длинное (максимум 500 символов).");
+                return true;
+            }
+
+            // Кулдаун через /tmp (0 SQL-запросов)
+            if (!$isSuper) {
+                $cdSec = ((int)$ctx['global']['is_vip'] === 1 || $myPriority >= 40) ? 10 : 20;
+                $cdFile = "/tmp/aigen_cd_{$fromId}.txt";
+                if (is_file($cdFile)) {
+                    $diff = time() - (int)@file_get_contents($cdFile);
+                    if ($diff < $cdSec) {
+                        sendMessage($peerId, "⏳ Подождите " . ($cdSec - $diff) . " сек. перед следующей генерацией фото.");
+                        return true;
+                    }
+                }
+                @file_put_contents($cdFile, (string)time());
+            }
+
+            require_once __DIR__ . '/ai_client.php';
+            require_once __DIR__ . '/quote_generator.php';
+
+            $imgPath = generateAiImage($prompt);
+            $uGen = formatUserMention($pdo, $peerId, $fromId, 'gen');
+            if ($imgPath === null) {
+                sendMessage($peerId, "⚠️ Не удалось сгенерировать фото для {$uGen} — сервис генерации перегружен. Попробуйте ещё раз через пару секунд.", null, ['disable_mentions' => 1]);
+                return true;
+            }
+
+            $upRes = uploadPhotoToVkMessage($peerId, $imgPath);
+            @unlink($imgPath);
+
+            if (empty($upRes['attachment'])) {
+                $errDetail = !empty($upRes['error']) ? ("\nПричина: " . $upRes['error']) : "";
+                sendMessage($peerId, "⚠️ Не удалось загрузить сгенерированное фото в ВКонтакте.{$errDetail}");
+                return true;
+            }
+
+            $kb = null;
+            if (mb_strlen($prompt) <= 150) {
+                $kb = makeInlineKeyboard([[
+                    ['label' => '🔄 Ещё вариант', 'payload' => ['cmd' => '!aigen ' . $prompt], 'color' => 'primary']
+                ]]);
+            }
+            $shortPrompt = mb_strlen($prompt) > 120 ? (mb_substr($prompt, 0, 117) . '...') : $prompt;
+            sendMessage($peerId, "🎨 ИИ-арт для {$uGen}\n📝 Запрос: {$shortPrompt}", $kb, ['attachment' => $upRes['attachment'], 'disable_mentions' => 1]);
+            return true;
+
+        case 'dem':
+            $raw = trim($args);
+            if ($raw === '') {
+                sendMessage($peerId, "🖼 Использование: прикрепите фото (или ответьте на сообщение с фото) и напишите:\n!дем Верхний текст | Нижний текст");
+                return true;
+            }
+            $parts = explode('|', $raw, 2);
+            $topTxt = trim($parts[0]);
+            $botTxt = isset($parts[1]) ? trim($parts[1]) : '';
+
+            if (!$isSuper) {
+                $cdFile = "/tmp/q_cd_{$fromId}.txt";
+                if (is_file($cdFile)) {
+                    $diff = time() - (int)@file_get_contents($cdFile);
+                    if ($diff < 5) {
+                        sendMessage($peerId, "⏳ Подождите " . (5 - $diff) . " сек. перед созданием следующего демотиватора.");
+                        return true;
+                    }
+                }
+                @file_put_contents($cdFile, (string)time());
+            }
+
+            require_once __DIR__ . '/quote_generator.php';
+            $photoUrl = extractPhotoUrlFromMessage($msg);
+
+            // Если фото не прикреплено — берём аватарку автора (или того, на кого ответили)
+            if ($photoUrl === null) {
+                $avUid = !empty($msg['reply_message']['from_id']) && (int)$msg['reply_message']['from_id'] > 0
+                    ? (int)$msg['reply_message']['from_id']
+                    : $fromId;
+                $uCacheKey = "qprof_{$avUid}";
+                $uProf = cacheGet($uCacheKey, 600);
+                if (!is_array($uProf)) {
+                    $vkRes = vkApi('users.get', ['user_ids' => $avUid, 'fields' => 'photo_400_orig,photo_200']);
+                    $uData = $vkRes['response'][0] ?? [];
+                    $uProf = [
+                        'name'   => trim(($uData['first_name'] ?? 'Игрок') . ' ' . ($uData['last_name'] ?? '')),
+                        'avatar' => (string)($uData['photo_400_orig'] ?? ($uData['photo_200'] ?? '')),
+                    ];
+                    cacheSet($uCacheKey, $uProf);
+                }
+                $photoUrl = !empty($uProf['avatar']) ? (string)$uProf['avatar'] : null;
+            }
+
+            if ($photoUrl === null) {
+                sendMessage($peerId, "⚠️ Прикрепите картинку к команде или ответьте на сообщение с фото.");
+                return true;
+            }
+
+            $imgPath = generateDemotivatorImage($photoUrl, $topTxt, $botTxt);
+            if ($imgPath === null) {
+                sendMessage($peerId, "⚠️ Не удалось создать демотиватор. Проверьте, что контейнер собран с PHP GD.");
+                return true;
+            }
+
+            $upRes = uploadPhotoToVkMessage($peerId, $imgPath);
+            @unlink($imgPath);
+
+            if (empty($upRes['attachment'])) {
+                $errDetail = !empty($upRes['error']) ? ("\nПричина: " . $upRes['error']) : "";
+                sendMessage($peerId, "⚠️ Не удалось загрузить демотиватор в ВКонтакте.{$errDetail}");
                 return true;
             }
 

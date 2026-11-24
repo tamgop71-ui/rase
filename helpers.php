@@ -631,6 +631,7 @@ function requestSuperApproval(PDO $pdo, int $peerId, int $actorId, int $targetId
         'warn'        => 'Предупреждение (варн)',
         'removerole'  => 'Снятие ролей в беседе',
         'gremoverole' => 'Снятие ролей (объединение)',
+        'zovvv'       => 'Глобальный вызов всех бесед (/zovvv)',
     ];
     $label = $actionLabels[$actionType] ?? strtoupper($actionType);
 
@@ -638,22 +639,32 @@ function requestSuperApproval(PDO $pdo, int $peerId, int $actorId, int $targetId
     $stChat->execute([$peerId]);
     $chatTitle = (string)($stChat->fetchColumn() ?: "Беседа #{$peerId}");
 
-    $uActor  = formatUserMention($pdo, $peerId, $actorId);
-    $uTarget = formatUserMention($pdo, $peerId, $targetId);
+    $uActor = formatUserMention($pdo, $peerId, $actorId);
     $durStr = '';
     if ($duration > 0) {
         $unit = ($actionType === 'mute') ? 'мин.' : 'дн.';
         $durStr = "\n⏳ Срок: {$duration} {$unit}";
     }
 
-    $dmText = "🚨 [ЗАПРОС НА НАКАЗАНИЕ СУПЕР-ДОСТУПА #{$reqId}]\n"
-            . "━━━━━━━━━━━━━━━━━━\n"
-            . "⚡ Действие: {$label}\n"
-            . "👮 Инициатор: {$uActor}\n"
-            . "🎯 Цель: {$uTarget}\n"
-            . "💬 Беседа: {$chatTitle} (ID: {$peerId}){$durStr}\n"
-            . "📝 Причина: {$reason}\n\n"
-            . "Разрешить выполнение этого действия?";
+    if ($actionType === 'zovvv') {
+        $dmText = "🚨 [ЗАПРОС НА ГЛОБАЛЬНЫЙ ВЫЗОВ /ZOVVV #{$reqId}]\n"
+                . "━━━━━━━━━━━━━━━━━━\n"
+                . "⚡ Действие: {$label}\n"
+                . "👮 Инициатор: {$uActor}\n"
+                . "💬 Из беседы: {$chatTitle} (ID: {$peerId})\n"
+                . "📝 Текст вызова: {$reason}\n\n"
+                . "Разрешить отправку /zovvv во все беседы бота?";
+    } else {
+        $uTarget = formatUserMention($pdo, $peerId, $targetId);
+        $dmText = "🚨 [ЗАПРОС НА НАКАЗАНИЕ СУПЕР-ДОСТУПА #{$reqId}]\n"
+                . "━━━━━━━━━━━━━━━━━━\n"
+                . "⚡ Действие: {$label}\n"
+                . "👮 Инициатор: {$uActor}\n"
+                . "🎯 Цель: {$uTarget}\n"
+                . "💬 Беседа: {$chatTitle} (ID: {$peerId}){$durStr}\n"
+                . "📝 Причина: {$reason}\n\n"
+                . "Разрешить выполнение этого действия?";
+    }
 
     $kb = makeInlineKeyboard([[
         ['label' => '✅ Разрешить', 'payload' => ['cmd' => "!superreq approve {$reqId}"], 'color' => 'positive'],
@@ -661,7 +672,12 @@ function requestSuperApproval(PDO $pdo, int $peerId, int $actorId, int $targetId
     ]]);
 
     sendMessage(MAIN_OWNER_VK_ID, $dmText, $kb);
-    sendMessage($peerId, "🛡 Пользователь {$uTarget} обладает супер-доступом.\n📩 Запрос #{$reqId} на разрешение действия («{$label}») отправлен Создателю бота в ЛС. Ожидайте решения.");
+    if ($actionType === 'zovvv') {
+        sendMessage($peerId, "🛡 Для выполнения глобального вызова /zovvv требуется одобрение Создателя бота.\n📩 Запрос #{$reqId} отправлен Создателю в ЛС. Ожидайте решения.");
+    } else {
+        $uTarget = formatUserMention($pdo, $peerId, $targetId);
+        sendMessage($peerId, "🛡 Пользователь {$uTarget} обладает супер-доступом.\n📩 Запрос #{$reqId} на разрешение действия («{$label}») отправлен Создателю бота в ЛС. Ожидайте решения.");
+    }
 }
 
 /**
@@ -676,13 +692,34 @@ function executeApprovedSuperAction(PDO $pdo, array $req, int $approverId): stri
     $reason   = (string)$req['reason'];
 
     $uActor  = formatUserMention($pdo, $peerId, $actorId);
-    $uTarget    = formatUserMention($pdo, $peerId, $targetId);
-    $uTargetAcc = formatUserMention($pdo, $peerId, $targetId, 'acc');
-    $uTargetDat = formatUserMention($pdo, $peerId, $targetId, 'dat');
-    $uTargetGen = formatUserMention($pdo, $peerId, $targetId, 'gen');
+    $uTarget    = $targetId > 0 ? formatUserMention($pdo, $peerId, $targetId) : '';
+    $uTargetAcc = $targetId > 0 ? formatUserMention($pdo, $peerId, $targetId, 'acc') : '';
+    $uTargetDat = $targetId > 0 ? formatUserMention($pdo, $peerId, $targetId, 'dat') : '';
+    $uTargetGen = $targetId > 0 ? formatUserMention($pdo, $peerId, $targetId, 'gen') : '';
     $uOwner     = formatUserMention($pdo, $peerId, $approverId);
 
     switch ($act) {
+        case 'zovvv':
+            $allPeers = $pdo->query("SELECT peer_id FROM bot_chats WHERE peer_id > 2000000000")->fetchAll(PDO::FETCH_COLUMN);
+            $calls = [];
+            foreach ($allPeers as $pId) {
+                $st = $pdo->prepare("SELECT vk_id FROM bot_chat_members WHERE peer_id = ? LIMIT 50");
+                $st->execute([(int)$pId]);
+                $mentions = array_map(fn($u) => "[id{$u}|🔔]", $st->fetchAll(PDO::FETCH_COLUMN));
+                $calls[] = [
+                    'method' => 'messages.send',
+                    'params' => [
+                        'peer_id'   => (int)$pId,
+                        'message'   => "🚨 Глобальный вызов от {$uActor}!\n💬 {$reason}\n\n" . implode(' ', $mentions),
+                        'random_id' => random_int(1, PHP_INT_MAX),
+                    ]
+                ];
+            }
+            vkApiMulti($calls, 10);
+            sendMessage($peerId, "✅ Глобальный вызов /zovvv одобрен Создателем ({$uOwner}) и отправлен в " . count($allPeers) . " бесед.");
+            sendToLogChat($pdo, "ZOVVV (одобрен {$uOwner}): инициатор {$uActor} -> " . count($allPeers) . " бесед. Текст: {$reason}");
+            return "Глобальный вызов /zovvv выполнен (" . count($allPeers) . " бесед).";
+
         case 'kick':
             $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active) VALUES (?, ?, ?, 'kick', ?, 0)")
                 ->execute([$peerId, $targetId, $actorId, $reason]);

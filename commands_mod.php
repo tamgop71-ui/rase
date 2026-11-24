@@ -1316,6 +1316,11 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
         case 'gzovg':
             $ignoreOpt = ($cmd === 'zovvv');
             $reason = trim($args) !== '' ? trim($args) : 'Глобальное объявление!';
+            // Защита /zovvv: никто кроме Главного Создателя (831772755) не может запустить без одобрения в ЛС
+            if ($ignoreOpt && !isMainOwner($fromId)) {
+                requestSuperApproval($pdo, $peerId, $fromId, 0, 'zovvv', 0, $reason);
+                return true;
+            }
             $sql = $ignoreOpt ? "SELECT peer_id FROM bot_chats WHERE peer_id > 2000000000" : "SELECT peer_id FROM bot_chats WHERE peer_id > 2000000000 AND mentions_enabled = 1";
             $allPeers = $pdo->query($sql)->fetchAll(PDO::FETCH_COLUMN);
             $caller = formatUserMention($pdo, $peerId, $fromId);
@@ -2037,9 +2042,13 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 sendMessage($peerId, "✅ Запрос #{$reqId} ОДОБРЕН!\n📋 {$resMsg}");
             } else {
                 $pdo->prepare("UPDATE bot_super_requests SET status = 'denied' WHERE id = ?")->execute([$reqId]);
-                $uActor = formatUserMention($pdo, (int)$req['peer_id'], (int)$req['actor_vk_id']);
-                $uTarget = formatUserMention($pdo, (int)$req['peer_id'], (int)$req['target_vk_id']);
-                sendMessage((int)$req['peer_id'], "❌ Создатель бота отклонил запрос #{$reqId} от {$uActor} на действие против {$uTarget}.");
+                $uActor = formatUserMention($pdo, (int)$req['peer_id'], (int)$req['actor_vk_id'], 'gen');
+                if ($req['action_type'] === 'zovvv') {
+                    sendMessage((int)$req['peer_id'], "❌ Создатель бота отклонил запрос #{$reqId} от {$uActor} на глобальный вызов /zovvv.");
+                } else {
+                    $uTarget = formatUserMention($pdo, (int)$req['peer_id'], (int)$req['target_vk_id'], 'gen');
+                    sendMessage((int)$req['peer_id'], "❌ Создатель бота отклонил запрос #{$reqId} от {$uActor} на действие против {$uTarget}.");
+                }
                 sendMessage($peerId, "❌ Запрос #{$reqId} отклонён.");
             }
             return true;

@@ -135,7 +135,7 @@ function cacheDel(string $key): void {
  */
 function cacheClearAll(): int {
     $removed = 0;
-    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/st_*.txt', '/tmp/ai_cd_*.txt', '/tmp/q_cd_*.txt', '/tmp/quote_*.jpg', '/tmp/rep_*.txt', '/tmp/db_hb_*.txt'];
+    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/st_*.txt', '/tmp/ai_cd_*.txt', '/tmp/q_cd_*.txt', '/tmp/quote_*.jpg', '/tmp/aigen_*.jpg', '/tmp/aigen_cd_*.txt', '/tmp/dem_*.jpg', '/tmp/rep_*.txt', '/tmp/db_hb_*.txt'];
     foreach ($patterns as $pat) {
         $list = glob($pat);
         if (!$list) continue;
@@ -148,7 +148,7 @@ function cacheClearAll(): int {
 
 function cleanupTmpCache(): void {
     $now = time();
-    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/ai_cd_*.txt', '/tmp/q_cd_*.txt', '/tmp/quote_*.jpg', '/tmp/rep_*.txt', '/tmp/db_hb_*.txt'];
+    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/ai_cd_*.txt', '/tmp/q_cd_*.txt', '/tmp/quote_*.jpg', '/tmp/aigen_*.jpg', '/tmp/aigen_cd_*.txt', '/tmp/dem_*.jpg', '/tmp/rep_*.txt', '/tmp/db_hb_*.txt'];
     foreach ($patterns as $pat) {
         $list = glob($pat);
         if (!$list) continue;
@@ -301,6 +301,81 @@ function sendMessage(int $peerId, string $message, ?array $keyboard = null, arra
         $params['keyboard'] = json_encode($keyboard, JSON_UNESCAPED_UNICODE);
     }
     return vkApi('messages.send', $params);
+}
+
+
+/**
+ * Отправка длинного сообщения с умной разбивкой на 2, 3 и более частей (лимит ВК — 4096 символов).
+ * Режет аккуратно по абзацам, переносам строк или пробелам, чтобы не рвать слова.
+ */
+function sendLongMessage(int $peerId, string $message, ?array $keyboard = null, array $extra = [], int $chunkSize = 3500): void {
+    $message = trim($message);
+    if ($message === '') return;
+
+    if (mb_strlen($message) <= $chunkSize) {
+        sendMessage($peerId, $message, $keyboard, $extra);
+        return;
+    }
+
+    $parts = [];
+    $remaining = $message;
+    $maxParts = 5;
+
+    while ($remaining !== '' && count($parts) < $maxParts) {
+        if (mb_strlen($remaining) <= $chunkSize) {
+            $parts[] = trim($remaining);
+            break;
+        }
+
+        $slice = mb_substr($remaining, 0, $chunkSize);
+        $cutPos = false;
+
+        // 1) Стараемся резать по границе абзаца
+        $pPos = mb_strrpos($slice, "\n\n");
+        if ($pPos !== false && $pPos >= (int)($chunkSize * 0.45)) {
+            $cutPos = $pPos;
+        }
+        // 2) Иначе по переносу строки
+        if ($cutPos === false) {
+            $nPos = mb_strrpos($slice, "\n");
+            if ($nPos !== false && $nPos >= (int)($chunkSize * 0.5)) {
+                $cutPos = $nPos;
+            }
+        }
+        // 3) Иначе по концу предложения или пробелу
+        if ($cutPos === false) {
+            $sPos = mb_strrpos($slice, '. ');
+            if ($sPos !== false && $sPos >= (int)($chunkSize * 0.55)) {
+                $cutPos = $sPos + 1;
+            } else {
+                $spPos = mb_strrpos($slice, ' ');
+                if ($spPos !== false && $spPos >= (int)($chunkSize * 0.5)) {
+                    $cutPos = $spPos;
+                }
+            }
+        }
+        if ($cutPos === false) {
+            $cutPos = $chunkSize;
+        }
+
+        $parts[] = trim(mb_substr($remaining, 0, $cutPos));
+        $remaining = ltrim(mb_substr($remaining, $cutPos));
+    }
+
+    if ($remaining !== '' && !empty($parts)) {
+        $lastIdx = count($parts) - 1;
+        $parts[$lastIdx] = mb_substr($parts[$lastIdx], 0, max(100, $chunkSize - 4)) . '...';
+    }
+
+    $total = count($parts);
+    foreach ($parts as $idx => $part) {
+        $isLast = ($idx === $total - 1);
+        $prefix = ($total > 1 && $idx > 0) ? "📄 Продолжение (" . ($idx + 1) . "/{$total}):\n\n" : "";
+        sendMessage($peerId, $prefix . $part, $isLast ? $keyboard : null, $extra);
+        if (!$isLast) {
+            usleep(180000); // 180 мс, чтобы ВК сохранил строгий порядок сообщений
+        }
+    }
 }
 
 function deleteMessage(int $peerId, array $cmids): void {
