@@ -1399,22 +1399,118 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
 
         case 'chatlist':
             $q = trim($args);
-            if ($q !== '' && ctype_digit($q) && (int)$q > 100) {
-                $tp = (int)$q; if ($tp < 2000000000) $tp += 2000000000;
-                $stC = $pdo->prepare("SELECT * FROM bot_chats WHERE peer_id = ?"); $stC->execute([$tp]); $c = $stC->fetch();
+
+            // Просмотр конкретной беседы по ID: /chatlist 2000000011 или /chatlist 11
+            if ($q !== '' && ctype_digit($q)) {
+                $tp = (int)$q;
+                if ($tp > 0 && $tp < 2000000000) $tp += 2000000000;
+                $stC = $pdo->prepare("SELECT * FROM bot_chats WHERE peer_id = ?");
+                $stC->execute([$tp]);
+                $c = $stC->fetch();
                 if (!$c) { sendMessage($peerId, "❌ Беседа {$tp} не найдена."); return true; }
-                $stMC = $pdo->prepare("SELECT COUNT(*) FROM bot_chat_members WHERE peer_id = ?"); $stMC->execute([$tp]); $mCnt = (int)$stMC->fetchColumn();
-                sendMessage($peerId, "💬 Беседа {$tp}:\n• Название: {$c['title']}\n• Участников: {$mCnt}\n• Сообщений: {$c['total_messages']}");
+
+                $realTitle = refreshChatTitle($pdo, $tp);
+                if ($realTitle !== "Беседа #{$tp}") $c['title'] = $realTitle;
+
+                $stMC = $pdo->prepare("SELECT COUNT(*) FROM bot_chat_members WHERE peer_id = ?");
+                $stMC->execute([$tp]);
+                $mCnt = (int)$stMC->fetchColumn();
+
+                $linkRes = vkApi('messages.getInviteLink', ['peer_id' => $tp, 'reset' => 0]);
+                $invLink = (string)($linkRes['response']['link'] ?? '');
+                $safeTitle = str_replace(['[', ']', '|'], ['(', ')', '/'], (string)$c['title']);
+                $titleDisplay = ($invLink !== '') ? "[{$invLink}|{$safeTitle}]" : $safeTitle;
+                $shortId = $tp - 2000000000;
+
+                $infoMsg = "💬 Беседа: {$titleDisplay}\n"
+                         . "• ID: {$tp} (#{$shortId})\n"
+                         . "• Участников в БД: {$mCnt}\n"
+                         . "• Сообщений: " . number_format((int)$c['total_messages'], 0, '.', ' ');
+                if ($invLink !== '') {
+                    $infoMsg .= "\n• Ссылка: {$invLink}";
+                }
+                sendMessage($peerId, $infoMsg, null, ['dont_parse_links' => 1]);
                 return true;
             }
-            $page = max(1, (int)$q); $limit = 10; $offset = ($page - 1) * $limit;
-            $stmt = $pdo->prepare("SELECT c.peer_id, c.title, c.total_messages, (SELECT COUNT(*) FROM bot_chat_members m WHERE m.peer_id = c.peer_id) AS mems FROM bot_chats c ORDER BY c.total_messages DESC LIMIT ? OFFSET ?");
-            $stmt->execute([$limit, $offset]);
-            $rows = $stmt->fetchAll();
-            if (empty($rows)) { sendMessage($peerId, "💬 Бесед нет (Страница {$page})."); return true; }
-            $lines = ["💬 Беседы бота (Страница {$page}):"];
-            foreach ($rows as $r) $lines[] = "• {$r['peer_id']} | {$r['title']} | Уч: {$r['mems']} | Сообщ: {$r['total_messages']}";
-            sendMessage($peerId, implode("\n", $lines));
+
+            // 1. Забираем ВСЕ беседы бота (только групповые чаты peer_id > 2000000000, без ЛС)
+            $rows = $pdo->query("
+                SELECT c.peer_id, c.title, c.total_messages,
+                       (SELECT COUNT(*) FROM bot_chat_members m WHERE m.peer_id = c.peer_id) AS mems
+                FROM bot_chats c
+                WHERE c.peer_id > 2000000000
+                ORDER BY c.peer_id ASC
+            ")->fetchAll();
+
+            if (empty($rows)) {
+                sendMessage($peerId, "💬 Активных бесед в базе пока нет.");
+                return true;
+            }
+
+            $allPeerIds = array_map(fn($r) => (int)$r['peer_id'], $rows);
+
+            // 2. Пакетно обновляем актуальные названия всех бесед через VK API (по 100 за 1 запрос)
+            $freshTitles = [];
+            foreach (array_chunk($allPeerIds, 100) as $chunk) {
+                $convRes = vkApi('messages.getConversationsById', ['peer_ids' => implode(',', $chunk)]);
+                foreach (($convRes['response']['items'] ?? []) as $item) {
+                    $pid = (int)($item['peer']['id'] ?? 0);
+                    $t = trim((string)($item['chat_settings']['title'] ?? ''));
+                    if ($pid > 2000000000 && $t !== '') {
+                        $t = mb_substr($t, 0, 120);
+                        $freshTitles[$pid] = $t;
+                    }
+                }
+            }
+
+            // 3. Параллельно получаем ссылки-приглашения для всех бесед (с кэшем на 5 мин)
+            $linksMap = [];
+            $toFetch = [];
+            foreach ($allPeerIds as $pid) {
+                $cachedLink = cacheGet("chatlink_{$pid}", 300);
+                if (is_string($cachedLink)) {
+                    $linksMap[$pid] = $cachedLink;
+                } else {
+                    $toFetch[] = $pid;
+                }
+            }
+
+            if (!empty($toFetch)) {
+                $calls = [];
+                foreach ($toFetch as $pid) {
+                    $calls[$pid] = [
+                        'method' => 'messages.getInviteLink',
+                        'params' => ['peer_id' => $pid, 'reset' => 0]
+                    ];
+                }
+                $multiRes = vkApiMulti($calls, 10);
+                foreach ($multiRes as $pid => $res) {
+                    $lnk = (string)($res['response']['link'] ?? '');
+                    $linksMap[(int)$pid] = $lnk;
+                    cacheSet("chatlink_{$pid}", $lnk);
+                }
+            }
+
+            // Обновляем изменившиеся названия в БД и формируем полный список
+            $stUpdTitle = $pdo->prepare("UPDATE bot_chats SET title = ? WHERE peer_id = ?");
+            $lines = ["💬 Все беседы бота (" . count($rows) . " шт.):"];
+            $num = 1;
+            foreach ($rows as $r) {
+                $pid = (int)$r['peer_id'];
+                $shortId = $pid - 2000000000;
+                $title = $freshTitles[$pid] ?? (string)$r['title'];
+                if (isset($freshTitles[$pid]) && $freshTitles[$pid] !== (string)$r['title']) {
+                    $stUpdTitle->execute([$freshTitles[$pid], $pid]);
+                }
+
+                $safeTitle = str_replace(['[', ']', '|'], ['(', ')', '/'], $title);
+                $lnk = $linksMap[$pid] ?? '';
+                $titleWithLink = ($lnk !== '') ? "[{$lnk}|{$safeTitle}]" : "{$safeTitle} (нет прав)";
+                $lines[] = "{$num}. {$titleWithLink} — ID: {$pid} (#{$shortId})";
+                $num++;
+            }
+
+            sendLongMessage($peerId, implode("\n", $lines), null, ['dont_parse_links' => 1]);
             return true;
 
         case 'userchats':
@@ -2592,6 +2688,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $stTitle->execute([$targetPeer]);
             $chatTitle = (string)($stTitle->fetchColumn() ?: "Беседа #{$targetPeer}");
             $shortId = $targetPeer - 2000000000;
+            cacheSet("chatlink_{$targetPeer}", $link);
             $statusNote = $doReset ? "🔄 Ссылка сброшена и сгенерирована заново!\n" : "";
 
             $kb = makeInlineKeyboard([[
