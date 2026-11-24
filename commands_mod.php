@@ -1022,6 +1022,125 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             sendMessage($peerId, $summary, $kb);
             return true;
 
+        case 'wipe':
+            $target = mb_strtolower(trim($args));
+            if ($target === 'nicks' || $target === 'ники') {
+                $pdo->prepare("UPDATE bot_chat_members SET nickname = NULL WHERE peer_id = ?")->execute([$peerId]);
+                sendMessage($peerId, "🧹 [WIPE] Все никнеймы в этой беседе сброшены.");
+            } elseif ($target === 'warns' || $target === 'варны' || $target === 'преды') {
+                $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND type = 'warn'")->execute([$peerId]);
+                sendMessage($peerId, "🧹 [WIPE] Все активные предупреждения в беседе очищены.");
+            } elseif ($target === 'bans' || $target === 'баны') {
+                $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND type IN ('ban','gban')")->execute([$peerId]);
+                sendMessage($peerId, "🧹 [WIPE] Список заблокированных в беседе очищен.");
+            } elseif ($target === 'roles' || $target === 'роли') {
+                $pdo->prepare("UPDATE bot_chat_members SET role_priority = 0 WHERE peer_id = ? AND role_priority < 100")->execute([$peerId]);
+                sendMessage($peerId, "🧹 [WIPE] Все роли (кроме Владельца 100) сняты.");
+            } else {
+                sendMessage($peerId, "🧹 Использование: !wipe [nicks / warns / bans / roles]");
+            }
+            return true;
+
+        case 'migration':
+            $raw = trim($args);
+            if ($raw === '') {
+                sendMessage($peerId, "📦 Миграция данных из других чат-менеджеров.\nОтправьте список строками вида:\n• !migration [id123|Ник] или ID Ник\n• !migration bans ID1 ID2 ...");
+                return true;
+            }
+            if (preg_match('/^bans\s+(.+)$/isu', $raw, $bm)) {
+                preg_match_all('/\b(\d{4,12})\b/', $bm[1], $ids);
+                $cnt = 0;
+                $exp = date('Y-m-d H:i:s', time() + 365 * 86400);
+                foreach (array_unique($ids[1]) as $uid) {
+                    $u = (int)$uid;
+                    $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, ?, 'ban', 'Миграция банов', 1, ?)")
+                        ->execute([$peerId, $u, $fromId, $exp]);
+                    $cnt++;
+                }
+                sendMessage($peerId, "📦 Миграция банов завершена! Перенесено записей: {$cnt}.");
+                return true;
+            }
+            $lines = preg_split('/\r?\n/u', $raw);
+            $cnt = 0;
+            foreach ($lines as $ln) {
+                $ln = trim($ln);
+                if (preg_match('/\[id(\d+)\|[^\]]+\]\s*[-—:]?\s*(.+)$/u', $ln, $m) || preg_match('/^(\d{4,12})\s+(.+)$/u', $ln, $m)) {
+                    $u = (int)$m[1];
+                    $nk = mb_substr(trim($m[2]), 0, 48);
+                    if ($u > 0 && $nk !== '') {
+                        ensureUserAndMember($pdo, $peerId, $u);
+                        $pdo->prepare("UPDATE bot_chat_members SET nickname = ? WHERE peer_id = ? AND vk_id = ?")->execute([$nk, $peerId, $u]);
+                        $cnt++;
+                    }
+                }
+            }
+            sendMessage($peerId, "📦 Миграция никнеймов завершена! Перенесено записей: {$cnt}.");
+            return true;
+
+        case 'games':
+            $pdo->prepare("UPDATE bot_chats SET games_enabled = 1 - games_enabled WHERE peer_id = ?")->execute([$peerId]);
+            $stG = $pdo->prepare("SELECT games_enabled FROM bot_chats WHERE peer_id = ?");
+            $stG->execute([$peerId]);
+            $st = (int)$stG->fetchColumn();
+            sendMessage($peerId, $st ? "🎮 Экономика и игры ВКЛЮЧЕНЫ в этой беседе." : "🎮 Экономика и игры ОТКЛЮЧЕНЫ в этой беседе.");
+            return true;
+
+        case 'automod':
+            $pdo->prepare("UPDATE bot_chats SET automod_enabled = 1 - automod_enabled WHERE peer_id = ?")->execute([$peerId]);
+            $stA = $pdo->prepare("SELECT automod_enabled FROM bot_chats WHERE peer_id = ?");
+            $stA->execute([$peerId]);
+            $st = (int)$stA->fetchColumn();
+            sendMessage($peerId, $st ? "🤖 Автомод ссылок ВКЛЮЧЁН! Сторонние ссылки вне !whitelist будут удаляться." : "🤖 Автомод ссылок ОТКЛЮЧЁН.");
+            return true;
+
+        case 'antiflood':
+            $pdo->prepare("UPDATE bot_chats SET antiflood_enabled = 1 - antiflood_enabled WHERE peer_id = ?")->execute([$peerId]);
+            $stF = $pdo->prepare("SELECT antiflood_enabled FROM bot_chats WHERE peer_id = ?");
+            $stF->execute([$peerId]);
+            $st = (int)$stF->fetchColumn();
+            sendMessage($peerId, $st ? "🌊 Антифлуд ВКЛЮЧЁН! За спам сообщениями бот будет автоматически выдавать мут." : "🌊 Антифлуд ОТКЛЮЧЁН.");
+            return true;
+
+        case 'editcmd':
+        case 'geditcmd':
+            if (!preg_match('/^([^\s]+)\s+(\d+)$/u', trim($args), $m)) {
+                sendMessage($peerId, "⚠️ Использование: !{$cmd} [команда] [приоритет 0-100]\nПример: !{$cmd} кик 40");
+                return true;
+            }
+            $targetCmd = resolveCanonicalCommand(ltrim(mb_strtolower($m[1]), '!/.+-'));
+            $prio = max(0, min(100, (int)$m[2]));
+            $peers = ($cmd === 'geditcmd') ? getUnityPeers($pdo, $peerId) : [$peerId];
+            foreach ($peers as $pId) {
+                $pdo->prepare("REPLACE INTO bot_cmd_permissions (peer_id, cmd_name, min_priority) VALUES (?, ?, ?)")->execute([$pId, $targetCmd, $prio]);
+                cacheDel("cmdp_{$pId}");
+            }
+            $rName = getRoleName($pdo, $peerId, $prio);
+            sendMessage($peerId, "⚙️ Доступ к команде «{$targetCmd}» изменён: требуется роль «{$rName}» ({$prio})" . ($cmd === 'geditcmd' ? (" во всём объединении (" . count($peers) . " бесед).") : "."));
+            return true;
+
+        case 'gedit':
+            if (!preg_match('/^(rules|правила|welcome|приветствие)\s+(.+)$/isu', trim($args), $m)) {
+                sendMessage($peerId, "⚠️ Использование:\n• !gedit правила [текст]\n• !gedit приветствие [текст]");
+                return true;
+            }
+            $type = mb_strtolower($m[1]);
+            $val = trim($m[2]);
+            $peers = getUnityPeers($pdo, $peerId);
+            $col = ($type === 'rules' || $type === 'правила') ? 'rules_text' : 'welcome_text';
+            foreach ($peers as $pId) {
+                $pdo->prepare("UPDATE bot_chats SET {$col} = ? WHERE peer_id = ?")->execute([$val, $pId]);
+            }
+            sendMessage($peerId, "✅ " . ($col === 'rules_text' ? 'Правила' : 'Приветствие') . " обновлены во всём объединении (" . count($peers) . " бесед).");
+            return true;
+
+        case 'owner':
+            $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
+            if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !owner [ID/упоминание]"); return true; }
+            ensureUserAndMember($pdo, $peerId, $targetId);
+            $pdo->prepare("UPDATE bot_chat_members SET role_priority = 100 WHERE peer_id = ? AND vk_id = ?")->execute([$peerId, $targetId]);
+            sendMessage($peerId, "👑 Права Владельца беседы (100) выданы " . formatUserMention($pdo, $peerId, $targetId, 'dat') . "!");
+            return true;
+
         case 'unity':
         case 'createunity':
             $uName = trim($args);
@@ -1650,19 +1769,95 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
 
         case 'createpromo':
             if (!preg_match('/^([A-Za-z0-9А-Яа-яё_\-]+)\s+(\S+)\s+(\d+)$/iu', trim($args), $m)) {
-                sendMessage($peerId, "🎟 Использование: !создатьпромо [КОД] [СУММА] [КОЛ-ВО АКТИВАЦИЙ]\nПример: !создатьпромо RASE2026 25к 15");
+                sendMessage($peerId, "🎟 Использование: /создатьпромо [КОД] [СУММА] [КОЛ-ВО АКТИВАЦИЙ]\nПример: /создатьпромо RASE2026 25к 15");
                 return true;
             }
             $code = mb_strtoupper(mb_substr($m[1], 0, 32));
-            $reward = parseAmount($m[2], 1000000);
-            $uses = max(1, min(500, (int)$m[3]));
-            if ($reward === null || $reward <= 0 || (!$isSuper && $reward > 500000)) {
-                sendMessage($peerId, "⚠️ Сумма награды должна быть от 1 ₽ до 500 000 ₽.");
+            $reward = parseAmount($m[2], 100000000);
+            $uses = max(1, min(10000, (int)$m[3]));
+            if ($reward === null || $reward <= 0) {
+                sendMessage($peerId, "⚠️ Укажите корректную сумму награды (от 1 ₽ до 100 000 000 ₽).");
                 return true;
             }
             $pdo->prepare("REPLACE INTO bot_promocodes (code, reward, uses_left, created_by) VALUES (?, ?, ?, ?)")
                 ->execute([$code, $reward, $uses, $fromId]);
-            sendMessage($peerId, "🎟 Промокод «{$code}» создан!\n💰 Награда: " . formatMoney($reward) . "\n👥 Активаций: {$uses}\nАктивация: !промо {$code}");
+            $uA = formatUserMention($pdo, $peerId, $fromId);
+            sendMessage($peerId, "🎟 Промокод «{$code}» создан!\n👑 Создал: {$uA}\n💰 Награда: " . formatMoney($reward) . "\n👥 Активаций: {$uses}\n📌 Активация: !промо {$code}");
+            return true;
+
+        case 'promolist':
+            $raw = trim($args);
+            if (preg_match('/^(?:удалить|del|delete|-)\s+([A-Za-z0-9А-Яа-яё_\-]+)$/iu', $raw, $m)) {
+                $delCode = mb_strtoupper($m[1]);
+                $stDel = $pdo->prepare("DELETE FROM bot_promocodes WHERE code = ?");
+                $stDel->execute([$delCode]);
+                sendMessage($peerId, $stDel->rowCount() > 0
+                    ? "🗑 Промокод «{$delCode}» удалён."
+                    : "❌ Промокод «{$delCode}» не найден.");
+                return true;
+            }
+            $rows = $pdo->query("SELECT code, reward, uses_left FROM bot_promocodes WHERE uses_left > 0 ORDER BY id DESC LIMIT 30")->fetchAll();
+            if (empty($rows)) {
+                sendMessage($peerId, "🎟 Активных промокодов нет.\nСоздать: /создатьпромо [КОД] [СУММА] [АКТИВАЦИЙ]");
+                return true;
+            }
+            $lines = ["🎟 Активные промокоды (" . count($rows) . "):"];
+            foreach ($rows as $r) {
+                $lines[] = "• {$r['code']} — " . formatMoney((int)$r['reward']) . " (осталось активаций: {$r['uses_left']})";
+            }
+            $lines[] = "\n🗑 Удалить: /промокоды удалить [КОД]";
+            sendMessage($peerId, implode("\n", $lines));
+            return true;
+
+        case 'sysfind':
+            $q = trim($args);
+            if (mb_strlen($q) < 2) {
+                sendMessage($peerId, "🔎 Использование: /sysfind [часть ника, имени или фамилии]\nПример: /sysfind Артем");
+                return true;
+            }
+            $like = '%' . $q . '%';
+            $stmt = $pdo->prepare("
+                SELECT DISTINCT u.vk_id, u.first_name, u.last_name, u.global_nick
+                FROM bot_users u
+                LEFT JOIN bot_chat_members m ON m.vk_id = u.vk_id
+                WHERE u.first_name LIKE ? OR u.last_name LIKE ? OR u.global_nick LIKE ? OR m.nickname LIKE ?
+                LIMIT 15
+            ");
+            $stmt->execute([$like, $like, $like, $like]);
+            $users = $stmt->fetchAll();
+
+            if (empty($users)) {
+                sendMessage($peerId, "🔎 По запросу «{$q}» никто не найден в базе бота.");
+                return true;
+            }
+
+            $stChats = $pdo->prepare("
+                SELECT c.peer_id, c.title, m.nickname, m.role_priority
+                FROM bot_chat_members m
+                JOIN bot_chats c ON c.peer_id = m.peer_id
+                WHERE m.vk_id = ? AND c.peer_id > 2000000000
+                ORDER BY m.role_priority DESC
+                LIMIT 4
+            ");
+
+            $lines = ["🔎 [SYSFIND] Результаты поиска по «{$q}» (" . count($users) . "):"];
+            $i = 1;
+            foreach ($users as $u) {
+                $uid = (int)$u['vk_id'];
+                $fullName = trim(($u['first_name'] ?? '') . ' ' . ($u['last_name'] ?? ''));
+                $gNick = !empty($u['global_nick']) ? " [{$u['global_nick']}]" : "";
+                $stChats->execute([$uid]);
+                $uChats = $stChats->fetchAll();
+                $chatParts = [];
+                foreach ($uChats as $uc) {
+                    $nickStr = !empty($uc['nickname']) ? " ({$uc['nickname']})" : "";
+                    $chatParts[] = "#{$uc['peer_id']}{$nickStr} [роль {$uc['role_priority']}]";
+                }
+                $chatsLine = !empty($chatParts) ? implode(', ', $chatParts) : 'нет в активных чатах';
+                $lines[] = "{$i}. [id{$uid}|{$fullName}]{$gNick} (ID: {$uid})\n   💬 {$chatsLine}";
+                $i++;
+            }
+            sendLongMessage($peerId, implode("\n", $lines), null, ['disable_mentions' => 1]);
             return true;
 
 

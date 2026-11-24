@@ -109,7 +109,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "• !unity / !unites / !createunity / !addunity / !editunity / !removeunity / !deleteunity\n"
                      . "• !sync / !spec / !gspec / !wipe / !migration / !clone [ID]\n"
                      . "• !editcmd / !geditcmd / !owner [ID] / !никэмодзи\n"
-                     . "• Супер-доступ: /sysban, /sysunban, /syskick, /sysrole, /sysnick, /giverub, /givesoo, /broadcast, /botban, /botunban, /sysstats, /telemetry, /sysaudit, /sysreset, /sysunmute, /sysleave, /clearcache, /syslist, /maintenance, !addws, !vip, !setlog, !zovvv, !gzovg, !gtimeuvedg, !listunities, !listen, !chatlist, !userchats, !ahistory, !checkban";
+                     . "• Супер-доступ: /sysban, /sysunban, /syskick, /sysrole, /sysnick, /giverub, /givesoo, /broadcast, /botban, /botunban, /sysstats, /telemetry, /sysfind, /создатьпромо, /promolist, /sysaudit, /sysreset, /sysunmute, /sysleave, /clearcache, /syslist, /maintenance, !addws, !vip, !setlog, !zovvv, !gzovg, !gtimeuvedg, !listunities, !listen, !chatlist, !userchats, !ahistory, !checkban";
             } else {
                 $txt = "📋 Справка по командам RASE RUSSIA BOT:\n"
                      . "Префиксы: ! / . + - (на русском и английском)\n\n"
@@ -123,7 +123,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "• !напоминания — список ваших активных напоминаний\n"
                      . "• !опрос [Вопрос | Вар 1 | Вар 2] — создать голосование\n"
                      . "• !афк (причина) — режим «отошёл»\n"
-                     . "• !правила / !роли / !админы / !онлайн / !thereid\n"
+                     . "• !правила / !роли / !админы / !онлайн / !thereid / /q (выйти)\n"
                      . "• /report [текст] — отправить тикет администрации\n\n"
                      . "👇 Выберите раздел на кнопках ниже:";
             }
@@ -1538,6 +1538,53 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             }
 
             sendMessage($peerId, "", null, ['attachment' => $upRes['attachment']]);
+            return true;
+
+
+        case 'leavechat':
+            if ($peerId <= 2000000000) {
+                sendMessage($peerId, "ℹ️ Команда /q работает только в групповых беседах.");
+                return true;
+            }
+            $reason = trim($args);
+            $uActor = formatUserMention($pdo, $peerId, $fromId);
+            $res = vkApi('messages.removeChatUser', [
+                'chat_id'   => $peerId - 2000000000,
+                'member_id' => $fromId,
+            ]);
+            if (isset($res['response']) && (int)$res['response'] === 1) {
+                $reasonStr = $reason !== '' ? ("\n💬 Прощальные слова: " . mb_substr($reason, 0, 150)) : "";
+                sendMessage($peerId, "👋 {$uActor} покинул(а) беседу по собственному желанию (/q).{$reasonStr}", null, ['disable_mentions' => 1]);
+            } else {
+                $code = (int)($res['error']['error_code'] ?? 0);
+                if (in_array($code, [15, 925, 935], true)) {
+                    sendMessage($peerId, "⚠️ {$uActor}, ВКонтакте не позволяет боту исключить создателя или администратора беседы (или у бота нет прав админа). Вы можете выйти вручную через настройки чата.", null, ['disable_mentions' => 1]);
+                } else {
+                    sendMessage($peerId, "⚠️ Не удалось выполнить выход из беседы (код {$code}). Выйдите вручную через настройки чата.");
+                }
+            }
+            return true;
+
+        case 'whorand':
+            if ($peerId <= 2000000000) {
+                sendMessage($peerId, "🎲 Команда !кто работает только в групповых беседах.");
+                return true;
+            }
+            $stmt = $pdo->prepare("SELECT vk_id FROM bot_chat_members WHERE peer_id = ? ORDER BY RAND() LIMIT 1");
+            $stmt->execute([$peerId]);
+            $pickedId = (int)$stmt->fetchColumn();
+            if ($pickedId <= 0) {
+                sendMessage($peerId, "⚠️ В базе беседы пока нет участников.");
+                return true;
+            }
+            $qText = trim($args);
+            $uPicked = formatUserMention($pdo, $peerId, $pickedId);
+            if ($qText !== '') {
+                $qText = rtrim(mb_substr($qText, 0, 180), '?');
+                sendMessage($peerId, "🎲 Я уверен, что {$qText} — это {$uPicked}!", null, ['disable_mentions' => 1]);
+            } else {
+                sendMessage($peerId, "🎲 Случайный участник беседы: {$uPicked}!", null, ['disable_mentions' => 1]);
+            }
             return true;
 
     }

@@ -231,7 +231,11 @@ function getCommandAliasMap(): array {
         'автосинк' => 'autosync', 'autosync' => 'autosync',
         'ии' => 'ai', 'ai' => 'ai', 'нейросеть' => 'ai', 'gpt' => 'ai', 'спроси' => 'ai',
         'иивкл' => 'aitoggle', 'aitoggle' => 'aitoggle',
-        'цитата' => 'quote', 'цит' => 'quote', 'quote' => 'quote', 'q' => 'quote',
+        'цитата' => 'quote', 'цит' => 'quote', 'quote' => 'quote',
+        'q' => 'leavechat', 'quit' => 'leavechat', 'выйти' => 'leavechat', 'выход' => 'leavechat', 'ливать' => 'leavechat', 'leave' => 'leavechat',
+        'кто' => 'whorand', 'случайный' => 'whorand', 'whorand' => 'whorand',
+        'промокоды' => 'promolist', 'promolist' => 'promolist', 'промолист' => 'promolist',
+        'sysfind' => 'sysfind', 'сиспоиск' => 'sysfind', 'глобпоиск' => 'sysfind', 'найтиюзера' => 'sysfind',
         'паспорт' => 'passport', 'карта' => 'passport', 'passport' => 'passport',
         'викторина' => 'quiz', 'квиз' => 'quiz', 'quiz' => 'quiz',
         'норма' => 'norm', 'norm' => 'norm', 'нормаадм' => 'norm',
@@ -278,7 +282,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'pin' => 80, 'unpin' => 80, 'admin' => 80, 'gadmin' => 80, 'newrole' => 80,
         'gnewrole' => 80, 'delrole' => 80, 'gdelrole' => 80, 'welcome' => 80,
         'setrules' => 80, 'delrules' => 80, 'setnote' => 80, 'inactive' => 80,
-        'givemoney' => 80, 'timeuved' => 80, 'enick' => 80, 'whitelist' => 80, 'massban' => 80, 'dailyreport' => 80, 'chatlink' => 80, 'filter' => 80, 'trigger' => 80, 'createpromo' => 80,
+        'givemoney' => 80, 'timeuved' => 80, 'enick' => 80, 'whitelist' => 80, 'massban' => 80, 'dailyreport' => 80, 'chatlink' => 80, 'filter' => 80, 'trigger' => 80,
 
         // 100 (Владелец)
         'settings' => 100, 'gsettings' => 100, 'setup' => 100, 'unity' => 100, 'unites' => 100,
@@ -293,7 +297,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'listen' => 999, 'chatlist' => 999, 'userchats' => 999, 'ahistory' => 999, 'checkban' => 999,
         'sysban' => 999, 'sysunban' => 999, 'syskick' => 999, 'sysrole' => 999, 'sysnick' => 999,
         'giverub' => 999, 'givesoo' => 999, 'broadcast' => 999, 'botban' => 999, 'botunban' => 999,
-        'maintenance' => 999, 'sysstats' => 999, 'telemetry' => 999, 'superreq' => 999, 'syslist' => 999, 'sysaudit' => 999, 'sysreset' => 999, 'sysunmute' => 999, 'sysleave' => 999, 'clearcache' => 999, 'koch' => 999,
+        'maintenance' => 999, 'sysstats' => 999, 'telemetry' => 999, 'createpromo' => 999, 'promolist' => 999, 'sysfind' => 999, 'superreq' => 999, 'syslist' => 999, 'sysaudit' => 999, 'sysreset' => 999, 'sysunmute' => 999, 'sysleave' => 999, 'clearcache' => 999, 'koch' => 999,
     ];
     return $priorities[$cmd] ?? 0;
 }
@@ -356,7 +360,7 @@ function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int
     }
 
     // Ленивая подгрузка: загружаем ТОЛЬКО тот модуль (fun или mod), который нужен для этой команды
-    static $funSet = ['admins' => true, 'afk' => true, 'ai' => true, 'atop' => true, 'ball' => true, 'bank' => true, 'beer' => true, 'bonus' => true, 'case' => true, 'casino' => true, 'choose' => true, 'citizenship' => true, 'clan' => true, 'clans' => true, 'coin' => true, 'countries' => true, 'dem' => true, 'deposit' => true, 'divorce' => true, 'duel' => true, 'emoji' => true, 'enick' => true, 'giveaway' => true, 'help' => true, 'hug' => true, 'iznas' => true, 'kiss' => true, 'marriages' => true, 'marry' => true, 'mention_off' => true, 'mention_on' => true, 'mentions' => true, 'minet' => true, 'mycountry' => true, 'online' => true, 'passport' => true, 'pay' => true, 'ping' => true, 'poll' => true, 'profile' => true, 'promo' => true, 'quests' => true, 'quiz' => true, 'quote' => true, 'remind' => true, 'reminders' => true, 'rep' => true, 'rob' => true, 'roles' => true, 'roll' => true, 'roulette' => true, 'rules' => true, 'shop' => true, 'slots' => true, 'start' => true, 'stickers' => true, 'thereid' => true, 'top' => true, 'try' => true, 'withdraw' => true, 'work' => true];
+    static $funSet = ['admins' => true, 'afk' => true, 'ai' => true, 'atop' => true, 'ball' => true, 'bank' => true, 'beer' => true, 'bonus' => true, 'case' => true, 'casino' => true, 'choose' => true, 'citizenship' => true, 'clan' => true, 'clans' => true, 'coin' => true, 'countries' => true, 'dem' => true, 'deposit' => true, 'divorce' => true, 'duel' => true, 'emoji' => true, 'enick' => true, 'giveaway' => true, 'help' => true, 'hug' => true, 'iznas' => true, 'kiss' => true, 'leavechat' => true, 'marriages' => true, 'marry' => true, 'mention_off' => true, 'mention_on' => true, 'mentions' => true, 'minet' => true, 'mycountry' => true, 'online' => true, 'passport' => true, 'pay' => true, 'ping' => true, 'poll' => true, 'profile' => true, 'promo' => true, 'quests' => true, 'quiz' => true, 'quote' => true, 'remind' => true, 'reminders' => true, 'rep' => true, 'rob' => true, 'roles' => true, 'roll' => true, 'roulette' => true, 'rules' => true, 'shop' => true, 'slots' => true, 'start' => true, 'stickers' => true, 'thereid' => true, 'top' => true, 'try' => true, 'whorand' => true, 'withdraw' => true, 'work' => true];
     if (isset($funSet[$cmd])) {
         require_once __DIR__ . '/commands_fun.php';
         if (handleFunAndGeneralCommands($pdo, $cmd, $args, $peerId, $fromId, $ctx, $msg, $myPriority, $isSuper)) {
