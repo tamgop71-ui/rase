@@ -236,6 +236,7 @@ function getCommandAliasMap(): array {
         'кто' => 'whorand', 'случайный' => 'whorand', 'whorand' => 'whorand',
         'промокоды' => 'promolist', 'promolist' => 'promolist', 'промолист' => 'promolist',
         'sysfind' => 'sysfind', 'сиспоиск' => 'sysfind', 'глобпоиск' => 'sysfind', 'найтиюзера' => 'sysfind',
+        'serv' => 'serv', 'сервер' => 'serv', 'server' => 'serv', 'crmp' => 'serv', 'онлайнсервера' => 'serv',
         'паспорт' => 'passport', 'карта' => 'passport', 'passport' => 'passport',
         'викторина' => 'quiz', 'квиз' => 'quiz', 'quiz' => 'quiz',
         'норма' => 'norm', 'norm' => 'norm', 'нормаадм' => 'norm',
@@ -297,7 +298,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'listen' => 999, 'chatlist' => 999, 'userchats' => 999, 'ahistory' => 999, 'checkban' => 999,
         'sysban' => 999, 'sysunban' => 999, 'syskick' => 999, 'sysrole' => 999, 'sysnick' => 999,
         'giverub' => 999, 'givesoo' => 999, 'broadcast' => 999, 'botban' => 999, 'botunban' => 999,
-        'maintenance' => 999, 'sysstats' => 999, 'telemetry' => 999, 'createpromo' => 999, 'promolist' => 999, 'sysfind' => 999, 'superreq' => 999, 'syslist' => 999, 'sysaudit' => 999, 'sysreset' => 999, 'sysunmute' => 999, 'sysleave' => 999, 'clearcache' => 999, 'koch' => 999,
+        'maintenance' => 999, 'sysstats' => 999, 'telemetry' => 999, 'createpromo' => 999, 'promolist' => 999, 'sysfind' => 999, 'serv' => 999, 'superreq' => 999, 'syslist' => 999, 'sysaudit' => 999, 'sysreset' => 999, 'sysunmute' => 999, 'sysleave' => 999, 'clearcache' => 999, 'koch' => 999,
     ];
     return $priorities[$cmd] ?? 0;
 }

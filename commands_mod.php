@@ -2840,6 +2840,123 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             sendMessage($peerId, $rep, null, ['disable_mentions' => 1]);
             return true;
 
+
+        case 'serv':
+            require_once __DIR__ . '/samp_query.php';
+
+            $raw = trim($args);
+            $ip = DEFAULT_CRMP_IP;
+            $port = DEFAULT_CRMP_PORT;
+            $forceRefresh = false;
+            $showPlayers = false;
+
+            if ($raw !== '') {
+                $tokens = preg_split('/\s+/u', $raw);
+                foreach ($tokens as $tok) {
+                    $lowTok = mb_strtolower(trim($tok));
+                    if (in_array($lowTok, ['refresh', 'обновить', 'upd', 'r'], true)) {
+                        $forceRefresh = true;
+                    } elseif (in_array($lowTok, ['players', 'игроки', 'онлайн', 'list', 'p'], true)) {
+                        $showPlayers = true;
+                        $forceRefresh = true;
+                    } elseif (preg_match('/^([a-z0-9\.\-]+):(\d{2,5})$/i', $tok, $pm)) {
+                        $ip = $pm[1];
+                        $port = (int)$pm[2];
+                    }
+                }
+            }
+
+            $addrArg = ($ip === DEFAULT_CRMP_IP && $port === DEFAULT_CRMP_PORT) ? '' : "{$ip}:{$port}";
+            $cacheKey = "serv_{$ip}_{$port}";
+            $data = (!$forceRefresh && !$showPlayers) ? cacheGet($cacheKey, 20) : null;
+
+            if (!is_array($data)) {
+                $data = querySampServer($ip, $port, $showPlayers);
+                if (!empty($data['online']) && !$showPlayers) {
+                    cacheSet($cacheKey, $data);
+                }
+            }
+
+            $btnBase = $addrArg !== '' ? "!serv {$addrArg}" : "!serv";
+
+            if (empty($data['online'])) {
+                $kb = makeInlineKeyboard([[
+                    ['label' => '🔄 Проверить снова', 'payload' => ['cmd' => "{$btnBase} refresh"], 'color' => 'primary']
+                ]]);
+                $errTxt = (string)($data['error'] ?? 'Сервер недоступен.');
+                sendMessage(
+                    $peerId,
+                    "🔴 Сервер CRMP сейчас ОФФЛАЙН\n"
+                    . "━━━━━━━━━━━━━━━━━━\n"
+                    . "🌐 Адрес: {$ip}:{$port}\n"
+                    . "⚠️ Причина: {$errTxt}\n"
+                    . "🕒 Проверка: " . date('d.m.Y H:i:s') . " МСК",
+                    $kb
+                );
+                return true;
+            }
+
+            if ($showPlayers) {
+                $plist = $data['player_list'] ?? [];
+                $curOn = (int)$data['players'];
+                $maxOn = (int)$data['max_players'];
+                if ($curOn === 0) {
+                    sendMessage($peerId, "👥 На сервере {$ip}:{$port} сейчас 0/{$maxOn} игроков.");
+                    return true;
+                }
+                if (empty($plist)) {
+                    sendMessage($peerId, "👥 Онлайн: {$curOn} / {$maxOn}\nℹ️ Сервер не отдаёт поимённый список игроков (протокол SA-MP/CRMP ограничивает список при онлайне > 100 или закрытой настройке сервера).");
+                    return true;
+                }
+                $pLines = ["👥 Игроки на «{$data['hostname']}» ({$curOn}/{$maxOn}):"];
+                $i = 1;
+                foreach ($plist as $pl) {
+                    $pLines[] = "{$i}. {$pl['name']} — Ур./Счёт: {$pl['score']}";
+                    $i++;
+                }
+                sendLongMessage($peerId, implode("\n", $pLines), null, ['disable_mentions' => 1]);
+                return true;
+            }
+
+            $curOn = (int)$data['players'];
+            $maxOn = (int)$data['max_players'];
+            $pct   = $maxOn > 0 ? round(($curOn / $maxOn) * 100, 1) : 0;
+            $bar   = sampProgressBar($curOn, $maxOn, 10);
+            $rules = $data['rules'] ?? [];
+
+            $lines = [
+                "🟢 Мониторинг сервера CRMP",
+                "━━━━━━━━━━━━━━━━━━",
+                "🏷 Название: {$data['hostname']}",
+                "🌐 Адрес: {$ip}:{$port}",
+                "👥 Онлайн: {$curOn} / {$maxOn} ({$pct}%)",
+                "📊 Загрузка: [{$bar}]",
+                "⚡ Пинг: {$data['ping']} мс",
+                "🎮 Режим: {$data['gamemode']}",
+                "🌍 Язык: {$data['language']}",
+                "🔒 Пароль: " . (!empty($data['password']) ? 'Да' : 'Нет'),
+            ];
+
+            if (!empty($rules['version']))   $lines[] = "🧩 Версия: {$rules['version']}";
+            if (!empty($rules['mapname']))   $lines[] = "🗺 Карта: {$rules['mapname']}";
+            if (!empty($rules['worldtime'])) $lines[] = "🕒 Время в игре: {$rules['worldtime']}";
+            if (!empty($rules['weather']))   $lines[] = "🌤 Погода: ID {$rules['weather']}";
+            if (!empty($rules['weburl']))    $lines[] = "🔗 Сайт: {$rules['weburl']}";
+
+            $lines[] = "━━━━━━━━━━━━━━━━━━";
+            $lines[] = "🕒 Обновлено: {$data['checked_at']} МСК";
+
+            $kbRow = [
+                ['label' => '🔄 Обновить', 'payload' => ['cmd' => "{$btnBase} refresh"], 'color' => 'primary']
+            ];
+            if ($curOn > 0 && $curOn <= 100) {
+                $kbRow[] = ['label' => '👥 Игроки онлайн', 'payload' => ['cmd' => "{$btnBase} players"], 'color' => 'secondary'];
+            }
+            $kb = makeInlineKeyboard([$kbRow]);
+
+            sendMessage($peerId, implode("\n", $lines), $kb, ['dont_parse_links' => 1]);
+            return true;
+
     }
 
     return false;
