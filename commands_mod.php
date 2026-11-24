@@ -2531,6 +2531,80 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             sendMessage($peerId, implode("\n", $lines), null, ['disable_mentions' => 1]);
             return true;
 
+
+        case 'chatlink':
+            $raw = trim($args);
+            $doReset = false;
+            $targetPeer = $peerId;
+
+            if ($raw !== '') {
+                $tokens = preg_split('/\s+/u', $raw);
+                foreach ($tokens as $tok) {
+                    $lowTok = mb_strtolower(trim($tok));
+                    if (in_array($lowTok, ['сброс', 'reset', 'новая', 'обновить', 'new', '1'], true) && !($lowTok === '1' && $targetPeer === $peerId && count($tokens) === 1)) {
+                        $doReset = true;
+                    } elseif (ctype_digit($lowTok)) {
+                        $num = (int)$lowTok;
+                        if ($num > 0) {
+                            $targetPeer = ($num < 2000000000) ? (2000000000 + $num) : $num;
+                        }
+                    }
+                }
+            }
+
+            if ($targetPeer <= 2000000000) {
+                sendMessage($peerId, "⚠️ Укажите ID беседы!\nПримеры:\n• !ссылка 2000000001 (или !ссылка 1)\n• !ссылка 2000000001 сброс — создать новую ссылку");
+                return true;
+            }
+
+            // Проверка прав на целевую беседу, если запрашивают ссылку на ДРУГОЙ чат
+            if ($targetPeer !== $peerId && !$isSuper) {
+                $stPerm = $pdo->prepare("SELECT role_priority FROM bot_chat_members WHERE peer_id = ? AND vk_id = ?");
+                $stPerm->execute([$targetPeer, $fromId]);
+                $tPrio = (int)$stPerm->fetchColumn();
+                $stOwn = $pdo->prepare("SELECT owner_vk_id FROM bot_chats WHERE peer_id = ?");
+                $stOwn->execute([$targetPeer]);
+                $tOwn = (int)$stOwn->fetchColumn();
+
+                if ($tPrio < 80 && $tOwn !== $fromId) {
+                    sendMessage($peerId, "⛔ Недостаточно прав для получения ссылки на беседу {$targetPeer}. Требуется роль Главного администратора (80+) в той беседе или супер-доступ.");
+                    return true;
+                }
+            }
+
+            $res = vkApi('messages.getInviteLink', [
+                'peer_id' => $targetPeer,
+                'reset'   => $doReset ? 1 : 0,
+            ]);
+
+            $link = (string)($res['response']['link'] ?? '');
+            if ($link === '') {
+                $code = (int)($res['error']['error_code'] ?? 0);
+                if (in_array($code, [7, 15, 917, 925], true)) {
+                    sendMessage($peerId, "⚠️ Не удалось получить ссылку на беседу {$targetPeer} (код {$code}).\nУбедитесь, что бот добавлен в эту беседу и имеет права администратора.");
+                } else {
+                    sendMessage($peerId, "⚠️ Не удалось получить ссылку на беседу {$targetPeer}. Проверьте правильность ID беседы.");
+                }
+                return true;
+            }
+
+            $stTitle = $pdo->prepare("SELECT title FROM bot_chats WHERE peer_id = ?");
+            $stTitle->execute([$targetPeer]);
+            $chatTitle = (string)($stTitle->fetchColumn() ?: "Беседа #{$targetPeer}");
+            $shortId = $targetPeer - 2000000000;
+            $statusNote = $doReset ? "🔄 Ссылка сброшена и сгенерирована заново!\n" : "";
+
+            $kb = makeInlineKeyboard([[
+                ['label' => '🔄 Сбросить ссылку', 'payload' => ['cmd' => "!ссылка {$targetPeer} сброс"], 'color' => 'secondary']
+            ]]);
+
+            sendMessage(
+                $peerId,
+                "{$statusNote}🔗 Ссылка-приглашение в беседу «{$chatTitle}» (ID: {$targetPeer} / #{$shortId}):\n{$link}",
+                $kb
+            );
+            return true;
+
     }
 
     return false;

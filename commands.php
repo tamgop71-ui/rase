@@ -234,6 +234,7 @@ function getCommandAliasMap(): array {
         'паспорт' => 'passport', 'карта' => 'passport', 'passport' => 'passport',
         'викторина' => 'quiz', 'квиз' => 'quiz', 'quiz' => 'quiz',
         'норма' => 'norm', 'norm' => 'norm', 'нормаадм' => 'norm',
+        'ссылка' => 'chatlink', 'link' => 'chatlink', 'chatlink' => 'chatlink', 'инвайт' => 'chatlink', 'invite' => 'chatlink',
         'дем' => 'dem', 'демотиватор' => 'dem', 'dem' => 'dem',
 
 
@@ -276,7 +277,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'pin' => 80, 'unpin' => 80, 'admin' => 80, 'gadmin' => 80, 'newrole' => 80,
         'gnewrole' => 80, 'delrole' => 80, 'gdelrole' => 80, 'welcome' => 80,
         'setrules' => 80, 'delrules' => 80, 'setnote' => 80, 'inactive' => 80,
-        'givemoney' => 80, 'timeuved' => 80, 'enick' => 80, 'whitelist' => 80, 'massban' => 80, 'dailyreport' => 80, 'filter' => 80, 'trigger' => 80, 'createpromo' => 80,
+        'givemoney' => 80, 'timeuved' => 80, 'enick' => 80, 'whitelist' => 80, 'massban' => 80, 'dailyreport' => 80, 'chatlink' => 80, 'filter' => 80, 'trigger' => 80, 'createpromo' => 80,
 
         // 100 (Владелец)
         'settings' => 100, 'gsettings' => 100, 'setup' => 100, 'unity' => 100, 'unites' => 100,

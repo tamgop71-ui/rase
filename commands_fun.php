@@ -98,7 +98,8 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "• !создатьпромо [КОД] [СУММА] [КОЛ-ВО] — промокоды\n"
                      . "• !pin / !unpin | !admin / !gadmin | !newrole / !delrole\n"
                      . "• !welcome / !setrules / !delrules / !заметки\n"
-                     . "• !неактив [дни] (кик) | !givemoney | !timeuved | !автоотчёт [ЧЧ:ММ]";
+                     . "• !неактив [дни] (кик) | !givemoney | !timeuved | !автоотчёт [ЧЧ:ММ]\n"
+                     . "• !ссылка (ID_чата) (сброс) — получить/обновить ссылку на беседу";
             } elseif ($cat === 'owner') {
                 $txt = "👑 Владелец беседы (100) и Супер-доступ (/addws):\n\n"
                      . "• !setup / !settings / !gsettings / !gedit\n"
