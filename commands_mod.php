@@ -934,6 +934,9 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $sub = mb_strtolower(trim($args));
             $peers = $isUnity ? getUnityPeers($pdo, $peerId) : [$peerId];
 
+            $protectSubs = ['automod', 'antiflood', 'antidrain', 'antiraid', 'anticaps', 'antisticker'];
+            $page = ($sub === 'p2' || $sub === '2' || $sub === 'защита' || in_array($sub, $protectSubs, true)) ? 2 : 1;
+
             if (in_array($sub, ['games', 'silence', 'mentions', 'automod', 'antiflood', 'antidrain', 'antiraid', 'anticaps', 'antisticker', 'autosync', 'ai'], true)) {
                 foreach ($peers as $pId) {
                     if ($sub === 'games') $pdo->prepare("UPDATE bot_chats SET games_enabled = 1 - games_enabled WHERE peer_id = ?")->execute([$pId]);
@@ -955,158 +958,68 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                     }
                 }
             }
+
             $stmtChat = $pdo->prepare("SELECT * FROM bot_chats WHERE peer_id = ?");
             $stmtChat->execute([$peerId]);
-            $c = $stmtChat->fetch();
-            $gS = (int)$c['games_enabled'] ? '✅' : '❌';
-            $aS = (int)$c['automod_enabled'] ? '✅' : '❌';
-            $fS = (int)$c['antiflood_enabled'] ? '✅' : '❌';
-            $dS = (int)($c['antidrain_enabled'] ?? 0) ? '✅' : '❌';
-            $rS = (int)($c['antiraid_enabled'] ?? 0) ? '✅' : '❌';
-            $cS = (int)($c['anticaps_enabled'] ?? 0) ? '✅' : '❌';
+            $c = $stmtChat->fetch() ?: [];
+
+            $gS  = (int)($c['games_enabled'] ?? 1) ? '✅' : '❌';
+            $aS  = (int)($c['automod_enabled'] ?? 0) ? '✅' : '❌';
+            $fS  = (int)($c['antiflood_enabled'] ?? 0) ? '✅' : '❌';
+            $dS  = (int)($c['antidrain_enabled'] ?? 0) ? '✅' : '❌';
+            $rS  = (int)($c['antiraid_enabled'] ?? 0) ? '✅' : '❌';
+            $cS  = (int)($c['anticaps_enabled'] ?? 0) ? '✅' : '❌';
             $stS = (int)($c['antisticker_enabled'] ?? 0) ? '✅' : '❌';
             $asS = (int)($c['autosync_enabled'] ?? 1) ? '✅' : '❌';
             $aiS = (int)($c['ai_enabled'] ?? 1) ? '✅' : '❌';
-            $mS = (int)$c['mentions_enabled'] ? '✅' : '❌';
-            $sS = (!empty($c['silence_until']) && strtotime($c['silence_until']) > time()) ? '✅' : '❌';
+            $mS  = (int)($c['mentions_enabled'] ?? 1) ? '✅' : '❌';
+            $sS  = (!empty($c['silence_until']) && strtotime((string)$c['silence_until']) > time()) ? '✅' : '❌';
             $pCmd = $isUnity ? '!gsettings' : '!settings';
-            $kb = makeInlineKeyboard([
-                [
-                    ['label' => "🎮 Игры {$gS}", 'payload' => ['cmd' => "{$pCmd} games"], 'color' => 'primary'],
-                    ['label' => "🔇 Тишина {$sS}", 'payload' => ['cmd' => "{$pCmd} silence"], 'color' => 'secondary']
-                ],
-                [
-                    ['label' => "🤖 Автомод {$aS}", 'payload' => ['cmd' => "{$pCmd} automod"], 'color' => 'primary'],
-                    ['label' => "🌊 Антифлуд {$fS}", 'payload' => ['cmd' => "{$pCmd} antiflood"], 'color' => 'secondary']
-                ],
-                [
-                    ['label' => "🛡 Анти-слив {$dS}", 'payload' => ['cmd' => "{$pCmd} antidrain"], 'color' => 'negative'],
-                    ['label' => "🚨 Анти-рейд {$rS}", 'payload' => ['cmd' => "{$pCmd} antiraid"], 'color' => 'negative']
-                ],
-                [
-                    ['label' => "🔡 Анти-капс {$cS}", 'payload' => ['cmd' => "{$pCmd} anticaps"], 'color' => 'secondary'],
-                    ['label' => "🎭 Анти-стикер {$stS}", 'payload' => ['cmd' => "{$pCmd} antisticker"], 'color' => 'secondary']
-                ],
-                [
-                    ['label' => "🔄 Автосинк {$asS}", 'payload' => ['cmd' => "{$pCmd} autosync"], 'color' => 'primary'],
-                    ['label' => "🧠 ИИ {$aiS}", 'payload' => ['cmd' => "{$pCmd} ai"], 'color' => 'positive'],
-                    ['label' => "🔔 Упоминания {$mS}", 'payload' => ['cmd' => "{$pCmd} mentions"], 'color' => 'secondary']
-                ]
-            ]);
-            $title = $isUnity ? "⚙️ Глобальные настройки объединения (" . count($peers) . " бесед):" : "⚙️ Настройки беседы:";
-            sendMessage($peerId, $title, $kb);
-            return true;
 
-        case 'games':
-            $pdo->prepare("UPDATE bot_chats SET games_enabled = 1 - games_enabled WHERE peer_id = ?")->execute([$peerId]);
-            $stS = $pdo->prepare("SELECT games_enabled FROM bot_chats WHERE peer_id = ?"); $stS->execute([$peerId]); $st = (int)$stS->fetchColumn();
-            sendMessage($peerId, $st ? "🎮 Игры и экономика включены!" : "🎮 Игры и экономика отключены.");
-            return true;
-
-        case 'automod':
-            $pdo->prepare("UPDATE bot_chats SET automod_enabled = 1 - automod_enabled WHERE peer_id = ?")->execute([$peerId]);
-            $stS = $pdo->prepare("SELECT automod_enabled FROM bot_chats WHERE peer_id = ?"); $stS->execute([$peerId]); $st = (int)$stS->fetchColumn();
-            sendMessage($peerId, $st ? "🤖 Автомодерация рекламы включена!" : "🤖 Автомодерация отключена.");
-            return true;
-
-        case 'antiflood':
-            $pdo->prepare("UPDATE bot_chats SET antiflood_enabled = 1 - antiflood_enabled WHERE peer_id = ?")->execute([$peerId]);
-            $stS = $pdo->prepare("SELECT antiflood_enabled FROM bot_chats WHERE peer_id = ?"); $stS->execute([$peerId]); $st = (int)$stS->fetchColumn();
-            sendMessage($peerId, $st ? "🌊 Антифлуд включён (автомут на 5 мин за спам)!" : "🌊 Антифлуд отключён.");
-            return true;
-
-        case 'migration':
-            $srcText = trim((string)($msg['reply_message']['text'] ?? ($msg['fwd_messages'][0]['text'] ?? $args)));
-            if ($srcText === '') {
-                sendMessage($peerId, "⚠️ Перешлите сообщение со списком ников или банов от Квик / Iris / Chat Manager и напишите !migration (или !migration bans).");
-                return true;
-            }
-            $isBanMode = (mb_stripos($args, 'ban') !== false || mb_stripos($srcText, 'заблокирован') !== false || mb_stripos($srcText, 'бан') !== false);
-            $lines = preg_split('/\r?\n/', $srcText);
-            $imported = 0;
-            foreach ($lines as $line) {
-                $uid = null; $nick = null;
-                if (preg_match('/\[id(\d+)\|([^\]]+)\](?:\s*[-—:]\s*(.+))?/iu', $line, $m)) {
-                    $uid = (int)$m[1];
-                    $nick = !empty($m[3]) ? trim($m[3]) : trim($m[2]);
-                } elseif (preg_match('/vk\.(?:com|ru)\/id(\d+)(?:\s*[-—:]\s*(.+))?/iu', $line, $m)) {
-                    $uid = (int)$m[1];
-                    $nick = !empty($m[2]) ? trim($m[2]) : null;
-                }
-                if ($uid && $uid > 0) {
-                    ensureUserAndMember($pdo, $peerId, $uid);
-                    if ($isBanMode) {
-                        $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active) VALUES (?, ?, ?, 'ban', 'Миграция блокировки', 1)")
-                            ->execute([$peerId, $uid, $fromId]);
-                    } elseif ($nick) {
-                        $pdo->prepare("UPDATE bot_chat_members SET nickname = ? WHERE peer_id = ? AND vk_id = ?")
-                            ->execute([mb_substr($nick, 0, 48), $peerId, $uid]);
-                    }
-                    $imported++;
-                }
-            }
-            sendMessage($peerId, $imported > 0
-                ? "✅ Миграция завершена! Перенесено записей (" . ($isBanMode ? "блокировок" : "никнеймов") . "): {$imported}."
-                : "❌ Не удалось распознать ни одной записи. Перешлите сообщение со ссылками/упоминаниями участников.");
-            return true;
-
-        case 'wipe':
-            $sub = mb_strtolower(trim($args));
-            if (in_array($sub, ['nicks', 'ники'], true)) {
-                $pdo->prepare("UPDATE bot_chat_members SET nickname = NULL WHERE peer_id = ?")->execute([$peerId]);
-                sendMessage($peerId, "🧹 Все никнеймы в беседе сброшены.");
-            } elseif (in_array($sub, ['warns', 'варны', 'преды'], true)) {
-                $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND type = 'warn'")->execute([$peerId]);
-                sendMessage($peerId, "🧹 Все активные предупреждения сброшены.");
-            } elseif (in_array($sub, ['bans', 'баны'], true)) {
-                $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND type IN ('ban','gban')")->execute([$peerId]);
-                sendMessage($peerId, "🧹 Все блокировки сброшены.");
-            } elseif (in_array($sub, ['roles', 'роли'], true)) {
-                $pdo->prepare("UPDATE bot_chat_members SET role_priority = 0 WHERE peer_id = ? AND role_priority < 100")->execute([$peerId]);
-                sendMessage($peerId, "🧹 Все роли (кроме владельца) сброшены.");
+            if ($page === 1) {
+                $kb = makeInlineKeyboard([
+                    [
+                        ['label' => "🎮 Игры {$gS}", 'payload' => ['cmd' => "{$pCmd} games"], 'color' => 'primary'],
+                        ['label' => "🔇 Тишина {$sS}", 'payload' => ['cmd' => "{$pCmd} silence"], 'color' => 'secondary']
+                    ],
+                    [
+                        ['label' => "🧠 ИИ {$aiS}", 'payload' => ['cmd' => "{$pCmd} ai"], 'color' => 'positive'],
+                        ['label' => "🔄 Автосинк {$asS}", 'payload' => ['cmd' => "{$pCmd} autosync"], 'color' => 'primary']
+                    ],
+                    [
+                        ['label' => "🔔 Упоминания {$mS}", 'payload' => ['cmd' => "{$pCmd} mentions"], 'color' => 'secondary'],
+                        ['label' => "🤖 Автомод {$aS}", 'payload' => ['cmd' => "{$pCmd} automod"], 'color' => 'primary']
+                    ],
+                    [
+                        ['label' => "🛡 Защита беседы →", 'payload' => ['cmd' => "{$pCmd} p2"], 'color' => 'negative']
+                    ]
+                ]);
+                $head = $isUnity ? "⚙️ Глобальные настройки (" . count($peers) . " бесед) — Основные:" : "⚙️ Настройки беседы — Основные:";
             } else {
-                $pdo->prepare("UPDATE bot_chat_members SET nickname = NULL WHERE peer_id = ?")->execute([$peerId]);
-                $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ?")->execute([$peerId]);
-                sendMessage($peerId, "🧹 Полный сброс: очищены никнеймы и активные наказания.");
+                $kb = makeInlineKeyboard([
+                    [
+                        ['label' => "🤖 Автомод {$aS}", 'payload' => ['cmd' => "{$pCmd} automod"], 'color' => 'primary'],
+                        ['label' => "🌊 Антифлуд {$fS}", 'payload' => ['cmd' => "{$pCmd} antiflood"], 'color' => 'secondary']
+                    ],
+                    [
+                        ['label' => "🛡 Анти-слив {$dS}", 'payload' => ['cmd' => "{$pCmd} antidrain"], 'color' => 'negative'],
+                        ['label' => "🚨 Анти-рейд {$rS}", 'payload' => ['cmd' => "{$pCmd} antiraid"], 'color' => 'negative']
+                    ],
+                    [
+                        ['label' => "🔡 Анти-капс {$cS}", 'payload' => ['cmd' => "{$pCmd} anticaps"], 'color' => 'secondary'],
+                        ['label' => "🎭 Анти-стикер {$stS}", 'payload' => ['cmd' => "{$pCmd} antisticker"], 'color' => 'secondary']
+                    ],
+                    [
+                        ['label' => "← Основные настройки", 'payload' => ['cmd' => "{$pCmd} p1"], 'color' => 'primary']
+                    ]
+                ]);
+                $head = $isUnity ? "🛡 Глобальные настройки (" . count($peers) . " бесед) — Защита:" : "🛡 Настройки беседы — Защита:";
             }
-            return true;
 
-        case 'owner':
-            $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
-            if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !owner [ID/упоминание]"); return true; }
-            ensureUserAndMember($pdo, $peerId, $targetId);
-            $pdo->prepare("UPDATE bot_chats SET owner_vk_id = ? WHERE peer_id = ?")->execute([$targetId, $peerId]);
-            $pdo->prepare("UPDATE bot_chat_members SET role_priority = 100 WHERE peer_id = ? AND vk_id = ?")->execute([$peerId, $targetId]);
-            sendMessage($peerId, "👑 Права Владельца беседы (100) выданы " . formatUserMention($pdo, $peerId, $targetId, 'dat') . "!");
-            return true;
-
-        case 'editcmd':
-        case 'geditcmd':
-            if (!preg_match('/^([\wа-яё]+)\s+(\d+)$/iu', trim($args), $m)) {
-                sendMessage($peerId, "⚠️ Использование: !editcmd [команда] [приоритет 0-100]");
-                return true;
-            }
-            $tCmd = resolveCanonicalCommand(mb_strtolower($m[1]));
-            $nPrio = max(0, min(100, (int)$m[2]));
-            $peers = ($cmd === 'geditcmd') ? getUnityPeers($pdo, $peerId) : [$peerId];
-            foreach ($peers as $pId) {
-                $pdo->prepare("REPLACE INTO bot_cmd_permissions (peer_id, cmd_name, min_priority) VALUES (?, ?, ?)")->execute([$pId, $tCmd, $nPrio]);
-                cacheDel("cmdp_{$pId}");
-            }
-            sendMessage($peerId, "⚙️ Приоритет команды «{$tCmd}» изменён на {$nPrio}.");
-            return true;
-
-        case 'gedit':
-            if (!preg_match('/^(rules|правила|welcome|приветствие)\s+(.+)$/isu', trim($args), $m)) {
-                sendMessage($peerId, "⚠️ Использование: !gedit [правила/приветствие] [текст]");
-                return true;
-            }
-            $col = in_array(mb_strtolower($m[1]), ['rules', 'правила'], true) ? 'rules_text' : 'welcome_text';
-            $peers = getUnityPeers($pdo, $peerId);
-            foreach ($peers as $pId) {
-                $pdo->prepare("UPDATE bot_chats SET {$col} = ? WHERE peer_id = ?")->execute([trim($m[2]), $pId]);
-            }
-            sendMessage($peerId, "✅ Текст обновлён во всех беседах объединения (" . count($peers) . " шт.).");
+            $summary = "{$head}\n"
+                     . "🎮 Игры: {$gS} | 🔇 Тишина: {$sS} | 🧠 ИИ: {$aiS} | 🔄 Автосинк: {$asS} | 🔔 Упом.: {$mS}\n"
+                     . "🤖 Автомод: {$aS} | 🌊 Флуд: {$fS} | 🛡 Слив: {$dS} | 🚨 Рейд: {$rS} | 🔡 Капс: {$cS} | 🎭 Стикеры: {$stS}";
+            sendMessage($peerId, $summary, $kb);
             return true;
 
         case 'unity':

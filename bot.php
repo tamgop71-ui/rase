@@ -104,10 +104,16 @@ if ($data['type'] === 'message_new') {
                     }
                 }
 
-                $kb = makeInlineKeyboard([[
+                $kbRows = [[
                     ['label' => '📋 Помощь (!помощь)', 'payload' => ['cmd' => '!помощь'], 'color' => 'primary'],
                     ['label' => '⚙️ Настройки (!settings)', 'payload' => ['cmd' => '!settings'], 'color' => 'secondary']
-                ]]);
+                ]];
+                if (!$ownerAssigned) {
+                    $kbRows[] = [
+                        ['label' => '👑 Активировать владельца (!setup)', 'payload' => ['cmd' => '!setup'], 'color' => 'positive']
+                    ];
+                }
+                $kb = makeInlineKeyboard($kbRows);
                 $roleNote = $ownerAssigned
                     ? "✅ Создателю беседы выдана роль Владельца (100), админам со звездой ({$adminsCount}) — Администратор (60)."
                     : "⚠️ Выдайте мне права администратора беседы и введите !sync (или !setup).";

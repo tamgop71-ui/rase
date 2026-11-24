@@ -390,9 +390,12 @@ function deleteMessage(int $peerId, array $cmids): void {
 
 function makeInlineKeyboard(array $rows): array {
     $buttons = [];
+    $total = 0;
     foreach ($rows as $row) {
+        if (count($buttons) >= 6 || $total >= 10) break;
         $btnRow = [];
         foreach ($row as $btn) {
+            if ($total >= 10) break;
             $btnRow[] = [
                 'action' => [
                     'type'    => 'text',
@@ -401,6 +404,7 @@ function makeInlineKeyboard(array $rows): array {
                 ],
                 'color' => $btn['color'] ?? 'secondary'
             ];
+            $total++;
         }
         if (!empty($btnRow)) {
             $buttons[] = $btnRow;
