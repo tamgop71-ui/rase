@@ -13,7 +13,6 @@ if (isset($_SERVER['HTTP_X_RETRY_COUNTER'])) {
 }
 
 require_once __DIR__ . '/config.php';
-require_once __DIR__ . '/helpers.php';
 
 $rawInput = file_get_contents('php://input');
 if (!$rawInput) {
@@ -47,6 +46,26 @@ if ($data['type'] === 'message_new') {
             exit('ok');
         }
 
+        // 2.0. Мгновенный fast-path для !пинг / !статус (1–2 мс, без загрузки helpers.php и без подключения к MySQL)
+        $fastText = $text;
+        if (!empty($msg['payload'])) {
+            $pTmp = json_decode((string)$msg['payload'], true);
+            if (!empty($pTmp['cmd']) && is_string($pTmp['cmd'])) {
+                $fastText = trim($pTmp['cmd']);
+            }
+        }
+        if ($fastText !== '' && preg_match('/^[!\/\.\+\-](?:пинг|статус|ping|status)$/iu', $fastText)) {
+            $cachedPerms = cacheGet("cmdp_{$peerId}", 60);
+            $isDisabled = is_array($cachedPerms) && ((int)($cachedPerms['ping'] ?? 0) >= 101);
+            if (!$isDisabled) {
+                sendFastPingResponse($peerId, $msg);
+                require_once __DIR__ . '/telemetry.php';
+                recordTelemetryEvent($peerId, $text, $msg['attachments'] ?? [], true);
+                exit('ok');
+            }
+        }
+
+        require_once __DIR__ . '/helpers.php';
         $pdo = getDB();
 
         $hasSticker = false;

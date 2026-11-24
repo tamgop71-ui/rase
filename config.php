@@ -322,6 +322,65 @@ function sendMessage(int $peerId, string $message, ?array $keyboard = null, arra
  * Отправка длинного сообщения с умной разбивкой на 2, 3 и более частей (лимит ВК — 4096 символов).
  * Режет аккуратно по абзацам, переносам строк или пробелам, чтобы не рвать слова.
  */
+
+/**
+ * Сверхбыстрый ответ на !пинг без подключения к MySQL:
+ * измеряет Задержку события, время обработки (1-2 мс) и реальное время VK API через messages.send + messages.edit.
+ */
+function sendFastPingResponse(int $peerId, array $msg = []): void {
+    $now = time();
+    $msgDate = (int)($msg['date'] ?? $now);
+    $eventDelay = max(0, $now - $msgDate);
+
+    $hb = is_file('/tmp/worker_hb.txt') ? (int)@file_get_contents('/tmp/worker_hb.txt') : 0;
+    $wDiff = $hb > 0 ? ($now - $hb) : -1;
+    $wStatus = ($wDiff >= 0 && $wDiff <= 45) ? "🟢 Активен ({$wDiff}с назад)" : "🟡 Перезапуск...";
+    $serverTime = date('d.m.Y H:i:s');
+
+    $procMs = isset($GLOBALS['_req_start'])
+        ? round((microtime(true) - $GLOBALS['_req_start']) * 1000, 1)
+        : 1.0;
+
+    $initText = "🏓 Понг! Бот RASE RUSSIA работает исправно.\n"
+              . "⚡ Задержка события: {$eventDelay} с | Обработка: {$procMs} мс | API: ...\n"
+              . "⚙ Фоновый демон: {$wStatus}\n"
+              . "🕒 Сервер: {$serverTime} МСК";
+
+    // Используем peer_ids, чтобы VK API вернул conversation_message_id для последующего messages.edit в беседах
+    $apiStart = microtime(true);
+    $sendRes = vkApi('messages.send', [
+        'peer_ids'         => $peerId,
+        'message'          => $initText,
+        'random_id'        => random_int(1, PHP_INT_MAX),
+        'disable_mentions' => 1,
+    ]);
+    $apiMs = round((microtime(true) - $apiStart) * 1000, 1);
+
+    $item = $sendRes['response'][0] ?? null;
+    $sentCmid = (int)($item['conversation_message_id'] ?? 0);
+    $sentMid  = (int)($item['message_id'] ?? 0);
+
+    if ($sentCmid > 0 || $sentMid > 0) {
+        $finalText = "🏓 Понг! Бот RASE RUSSIA работает исправно.\n"
+                   . "⚡ Задержка события: {$eventDelay} с | Обработка: {$procMs} мс | API: {$apiMs} мс\n"
+                   . "⚙ Фоновый демон: {$wStatus}\n"
+                   . "🕒 Сервер: {$serverTime} МСК";
+
+        $editParams = [
+            'peer_id' => $peerId,
+            'message' => $finalText,
+        ];
+        if ($peerId > 2000000000 && $sentCmid > 0) {
+            $editParams['conversation_message_id'] = $sentCmid;
+        } elseif ($sentMid > 0) {
+            $editParams['message_id'] = $sentMid;
+        } else {
+            $editParams['conversation_message_id'] = $sentCmid;
+        }
+        vkApi('messages.edit', $editParams);
+    }
+}
+
 function sendLongMessage(int $peerId, string $message, ?array $keyboard = null, array $extra = [], int $chunkSize = 3500): void {
     $message = trim($message);
     if ($message === '') return;

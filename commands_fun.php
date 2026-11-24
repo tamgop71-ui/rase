@@ -10,11 +10,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
         // 1. ОБЩИЕ КОМАНДЫ, НАПОМИНАЛКИ, AFK, ОПРОСЫ
         // ==========================================
         case 'ping':
-            $totalMs = isset($GLOBALS['_req_start']) ? round((microtime(true) - $GLOBALS['_req_start']) * 1000, 1) : 1.0;
-            $hb = is_file('/tmp/worker_hb.txt') ? (int)@file_get_contents('/tmp/worker_hb.txt') : 0;
-            $wDiff = $hb > 0 ? (time() - $hb) : -1;
-            $wStatus = ($wDiff >= 0 && $wDiff <= 45) ? "🟢 Активен ({$wDiff}с назад)" : "🟡 Перезапуск...";
-            sendMessage($peerId, "🏓 Понг! Бот RASE RUSSIA работает исправно.\n⚡ Скорость ответа: {$totalMs} мс\n⚙ Фоновый демон: {$wStatus}\n🕒 Сервер: " . date('d.m.Y H:i:s') . " МСК");
+            sendFastPingResponse($peerId, $msg);
             return true;
 
         case 'start':
