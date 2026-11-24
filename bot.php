@@ -3,20 +3,17 @@ declare(strict_types=1);
 
 $GLOBALS['_req_start'] = microtime(true);
 
-require_once __DIR__ . '/config.php';
-require_once __DIR__ . '/helpers.php';
-require_once __DIR__ . '/telemetry.php';
-
-// Healthcheck для мониторинга контейнера без нагрузки на БД
+// Мгновенный ответ на healthcheck и повторные запросы ВК (<0.3 мс, до загрузки модулей и БД)
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
     header('Content-Type: text/plain; charset=utf-8');
     exit('ok');
 }
-
-// Защита от повторных запросов Callback API ВК
 if (isset($_SERVER['HTTP_X_RETRY_COUNTER'])) {
     exit('ok');
 }
+
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/helpers.php';
 
 $rawInput = file_get_contents('php://input');
 if (!$rawInput) {
@@ -194,9 +191,8 @@ if ($data['type'] === 'message_new') {
             exit('ok');
         }
 
-        // 2.1.5. Телеметрия (0 SQL-запросов, запись в /tmp/bot_telemetry.log)
+        // 2.1.5. Флаг команды для отложенной телеметрии (пишется ПОСЛЕ ответа пользователю)
         $isCmdEvent = ($text !== '' && (bool)preg_match('/^[!\/\.\+\-][\wа-яё]+/iu', $text)) || !empty($msg['payload']);
-        recordTelemetryEvent($peerId, $text, $msg['attachments'] ?? [], $isCmdEvent);
 
         // 2.2. Быстрый контекст (1 SELECT + 1 multi-table UPDATE)
         $ctx = ensureUserAndMember($pdo, $peerId, $fromId, $text, $hasSticker, true);
@@ -258,8 +254,7 @@ if ($data['type'] === 'message_new') {
                     $expires = date('Y-m-d H:i:s', time() + 300);
                     $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, 0, 'mute', 'Антифлуд (автомут)', 1, ?)")
                         ->execute([$peerId, $fromId, $expires]);
-                    if ($cmid > 0) deleteMessage($peerId, [$cmid]);
-                    sendMessage($peerId, "🌊 " . formatUserMention($pdo, $peerId, $fromId) . " получил(а) автомут на 5 мин. за флуд!");
+                    deleteAndSend($peerId, $cmid > 0 ? [$cmid] : [], "🌊 " . formatUserMention($pdo, $peerId, $fromId) . " получил(а) автомут на 5 мин. за флуд!");
                     exit('ok');
                 }
             }
@@ -271,8 +266,7 @@ if ($data['type'] === 'message_new') {
                     $lowText = mb_strtolower($text);
                     foreach ($badWords as $bw) {
                         if ($bw !== '' && str_contains($lowText, $bw)) {
-                            if ($cmid > 0) deleteMessage($peerId, [$cmid]);
-                            sendMessage($peerId, "🛡 " . formatUserMention($pdo, $peerId, $fromId) . ", ваше сообщение удалено фильтром запрещённых слов.");
+                            deleteAndSend($peerId, $cmid > 0 ? [$cmid] : [], "🛡 " . formatUserMention($pdo, $peerId, $fromId) . ", ваше сообщение удалено фильтром запрещённых слов.");
                             exit('ok');
                         }
                     }
@@ -281,16 +275,14 @@ if ($data['type'] === 'message_new') {
 
             // Анти-капс (!антикапс) — 0 SQL-запросов
             if ((int)($ctx['chat']['anticaps_enabled'] ?? 0) === 1 && $myPriority <= 0 && $text !== '' && isExcessiveCaps($text)) {
-                if ($cmid > 0) deleteMessage($peerId, [$cmid]);
-                sendMessage($peerId, "🔡 " . formatUserMention($pdo, $peerId, $fromId) . ", пожалуйста, не пишите КАПСОМ!");
+                deleteAndSend($peerId, $cmid > 0 ? [$cmid] : [], "🔡 " . formatUserMention($pdo, $peerId, $fromId) . ", пожалуйста, не пишите КАПСОМ!");
                 exit('ok');
             }
 
             // Анти-стикер (!антистикер) — 0 SQL-запросов
             if ($hasSticker && (int)($ctx['chat']['antisticker_enabled'] ?? 0) === 1 && $myPriority <= 0) {
                 if (checkAntiSticker($peerId, $fromId)) {
-                    if ($cmid > 0) deleteMessage($peerId, [$cmid]);
-                    sendMessage($peerId, "🎭 " . formatUserMention($pdo, $peerId, $fromId) . ", не спамьте стикерами!");
+                    deleteAndSend($peerId, $cmid > 0 ? [$cmid] : [], "🎭 " . formatUserMention($pdo, $peerId, $fromId) . ", не спамьте стикерами!");
                     exit('ok');
                 }
             }
@@ -299,8 +291,7 @@ if ($data['type'] === 'message_new') {
             if ((int)($ctx['chat']['automod_enabled'] ?? 0) === 1 && $myPriority <= 0 && ($text !== '' || !empty($msg['attachments']))) {
                 $blocked = findBlockedLink($pdo, $peerId, $text, $msg['attachments'] ?? []);
                 if ($blocked !== null) {
-                    if ($cmid > 0) deleteMessage($peerId, [$cmid]);
-                    sendMessage($peerId, "🤖 " . formatUserMention($pdo, $peerId, $fromId) . ", сторонние ссылки и реклама запрещены! Разрешены только домены из !whitelist.");
+                    deleteAndSend($peerId, $cmid > 0 ? [$cmid] : [], "🤖 " . formatUserMention($pdo, $peerId, $fromId) . ", сторонние ссылки и реклама запрещены! Разрешены только домены из !whitelist.");
                     exit('ok');
                 }
             }
@@ -326,6 +317,8 @@ if ($data['type'] === 'message_new') {
             require_once __DIR__ . '/commands.php';
             executeCommand($pdo, mb_strtolower($matches[2]), trim($matches[3] ?? ''), $peerId, $fromId, $ctx, $msg, $matches[1]);
             flushPendingStats($pdo, $ctx);
+            require_once __DIR__ . '/telemetry.php';
+            recordTelemetryEvent($peerId, $text, $msg['attachments'] ?? [], true);
             exit('ok');
         }
 
@@ -362,6 +355,8 @@ if ($data['type'] === 'message_new') {
         }
 
         flushPendingStats($pdo, $ctx);
+        require_once __DIR__ . '/telemetry.php';
+        recordTelemetryEvent($peerId, $text, $msg['attachments'] ?? [], $isCmdEvent);
     } catch (Throwable $e) {
         if (isDbGoneAway($e)) {
             file_put_contents('php://stderr', "[DB RECONNECT] Lost connection, retrying request..." . PHP_EOL);

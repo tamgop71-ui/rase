@@ -102,18 +102,30 @@ function isDbGoneAway(Throwable $e): bool {
  * Быстрый локальный кэш в /tmp (экономит сетевые запросы к удалённой БД)
  */
 function cacheGet(string $key, int $ttl = 60) {
+    $now = time();
+    if (isset($GLOBALS['_ram_cache'][$key])) {
+        $entry = $GLOBALS['_ram_cache'][$key];
+        if ($ttl <= 0 || ($now - $entry['t']) <= $ttl) {
+            return $entry['v'];
+        }
+        unset($GLOBALS['_ram_cache'][$key]);
+    }
     $file = '/tmp/botc_' . md5($key) . '.json';
     if (!is_file($file)) return null;
-    if ($ttl > 0 && (time() - (int)@filemtime($file)) > $ttl) {
+    $mtime = (int)@filemtime($file);
+    if ($ttl > 0 && ($now - $mtime) > $ttl) {
         @unlink($file);
         return null;
     }
     $raw = @file_get_contents($file);
     if ($raw === false) return null;
-    return json_decode($raw, true);
+    $val = json_decode($raw, true);
+    $GLOBALS['_ram_cache'][$key] = ['t' => $mtime, 'v' => $val];
+    return $val;
 }
 
 function cacheSet(string $key, $value): void {
+    $GLOBALS['_ram_cache'][$key] = ['t' => time(), 'v' => $value];
     $file = '/tmp/botc_' . md5($key) . '.json';
     $tmp  = $file . '.' . getmypid() . '.tmp';
     if (@file_put_contents($tmp, json_encode($value, JSON_UNESCAPED_UNICODE)) !== false) {
@@ -122,6 +134,7 @@ function cacheSet(string $key, $value): void {
 }
 
 function cacheDel(string $key): void {
+    unset($GLOBALS['_ram_cache'][$key]);
     $file = '/tmp/botc_' . md5($key) . '.json';
     if (is_file($file)) @unlink($file);
 }
@@ -134,6 +147,7 @@ function cacheDel(string $key): void {
  * Полная очистка локального кэша в /tmp (команда /clearcache)
  */
 function cacheClearAll(): int {
+    $GLOBALS['_ram_cache'] = [];
     $removed = 0;
     $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/ai_cd_*.txt', '/tmp/q_cd_*.txt', '/tmp/quote_*.jpg', '/tmp/pass_*.jpg', '/tmp/quiz_*.json', '/tmp/dem_*.jpg', '/tmp/rep_*.txt', '/tmp/db_hb_*.txt'];
     foreach ($patterns as $pat) {
@@ -386,6 +400,39 @@ function deleteMessage(int $peerId, array $cmids): void {
         'cmids'          => implode(',', $cmids),
         'delete_for_all' => 1
     ]);
+}
+
+/**
+ * Параллельное удаление сообщений и отправка ответа за 1 сетевой раунд-трип (в 2 раза быстрее)
+ */
+function deleteAndSend(int $peerId, array $cmids, string $message, ?array $keyboard = null, array $extra = []): void {
+    $cmids = array_values(array_unique(array_filter(array_map('intval', $cmids))));
+    if (empty($cmids)) {
+        sendMessage($peerId, $message, $keyboard, $extra);
+        return;
+    }
+    $sendParams = array_merge([
+        'peer_id'   => $peerId,
+        'message'   => $message,
+        'random_id' => random_int(1, PHP_INT_MAX),
+    ], $extra);
+    if ($keyboard !== null) {
+        $sendParams['keyboard'] = json_encode($keyboard, JSON_UNESCAPED_UNICODE);
+    }
+    vkApiMulti([
+        [
+            'method' => 'messages.delete',
+            'params' => [
+                'peer_id'        => $peerId,
+                'cmids'          => implode(',', $cmids),
+                'delete_for_all' => 1,
+            ]
+        ],
+        [
+            'method' => 'messages.send',
+            'params' => $sendParams
+        ]
+    ], 2);
 }
 
 function makeInlineKeyboard(array $rows): array {

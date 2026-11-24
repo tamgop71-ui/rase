@@ -707,14 +707,31 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             return true;
 
         case 'delmsg':
-            $cmids = [];
-            if (!empty($msg['reply_message']['conversation_message_id'])) $cmids[] = (int)$msg['reply_message']['conversation_message_id'];
-            foreach (($msg['fwd_messages'] ?? []) as $fw) {
-                if (!empty($fw['conversation_message_id'])) $cmids[] = (int)$fw['conversation_message_id'];
+            $targetCmids = [];
+            if (!empty($msg['reply_message']['conversation_message_id'])) {
+                $targetCmids[] = (int)$msg['reply_message']['conversation_message_id'];
             }
-            if (empty($cmids)) { sendMessage($peerId, "⚠️ Перешлите или ответьте на сообщение для удаления."); return true; }
-            deleteMessage($peerId, $cmids);
-            sendMessage($peerId, "🗑 Сообщение удалено.");
+            foreach (($msg['fwd_messages'] ?? []) as $fw) {
+                if (!empty($fw['conversation_message_id'])) {
+                    $targetCmids[] = (int)$fw['conversation_message_id'];
+                }
+            }
+            $targetCmids = array_values(array_unique(array_filter($targetCmids)));
+            if (empty($targetCmids)) {
+                sendMessage($peerId, "⚠️ Перешлите или ответьте на сообщение для удаления.");
+                return true;
+            }
+
+            // Добавляем саму команду !удалить от пользователя, чтобы в чате осталось только уведомление
+            $delCmids = $targetCmids;
+            if (!empty($msg['conversation_message_id'])) {
+                $delCmids[] = (int)$msg['conversation_message_id'];
+            }
+
+            $confirmText = count($targetCmids) > 1
+                ? ("🗑 Удалено сообщений: " . count($targetCmids) . ".")
+                : "🗑 Сообщение удалено.";
+            deleteAndSend($peerId, $delCmids, $confirmText);
             return true;
 
         case 'gm':

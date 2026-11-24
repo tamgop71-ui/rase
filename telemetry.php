@@ -53,7 +53,7 @@ function recordTelemetryEvent(int $peerId, string $text, array $attachments = []
 
     $cmdFlag = $isCommand ? 1 : 0;
     $line = "{$ts}|{$peerId}|{$chars}|{$emojis}|{$words}|{$profanity}|{$cmdFlag}|{$voice}|{$photo}|{$video}|{$audio}|{$wall}|{$sticker}\n";
-    @file_put_contents(TELEMETRY_LOG_FILE, $line, FILE_APPEND | LOCK_EX);
+    @file_put_contents(TELEMETRY_LOG_FILE, $line, FILE_APPEND);
 }
 
 function telemetryFmtPct(int $part, int $total): string {

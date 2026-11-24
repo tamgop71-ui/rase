@@ -1,7 +1,6 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/config.php';
-require_once __DIR__ . '/inflect.php';
 
 $GLOBALS['_roles_cache']   = [];
 $GLOBALS['_mention_cache'] = [];
@@ -455,7 +454,12 @@ function formatUserMention(PDO $pdo, int $peerId, int $vkId, string $case = 'nom
         return "[id{$vkId}|ID {$vkId}]";
     }
 
-    $name = ($case === 'nom') ? $raw['name'] : inflectRussianName($raw['name'], $case);
+    if ($case === 'nom') {
+        $name = $raw['name'];
+    } else {
+        require_once __DIR__ . '/inflect.php';
+        $name = inflectRussianName($raw['name'], $case);
+    }
     $mention = "[id{$vkId}|{$raw['emoji']}{$name}]";
     if ($case === 'nom') {
         $GLOBALS['_mention_cache'][$key] = $mention;
