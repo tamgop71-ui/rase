@@ -2995,14 +2995,31 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
 
         case 'msghistory':
             // Просмотр сообщения до редактирования (только супер-доступ, 0 SQL-запросов)
-            $replyCmid = (int)($msg['reply_message']['conversation_message_id'] ?? 0);
+            $refMsg = !empty($msg['reply_message']) ? $msg['reply_message'] : ($msg['fwd_messages'][0] ?? null);
+            $replyCmid = is_array($refMsg) ? (int)($refMsg['conversation_message_id'] ?? ($refMsg['id'] ?? 0)) : 0;
             if ($replyCmid > 0) {
                 $edits = getMessageEdits($peerId, $replyCmid, null, 20);
+
+                // Резервный механизм: если VK не прислал message_edit, но у нас в буфере сохранился исходный текст и он отличается от текущего
                 if (empty($edits)) {
-                    sendMessage($peerId, "ℹ️ Для выбранного сообщения (#{$replyCmid}) не зафиксировано редактирований.\n(Убедитесь, что в Callback API группы ВК включено событие «Редактирование сообщения» / message_edit.)");
+                    $savedOrig = getSavedOriginalMessage($peerId, $replyCmid);
+                    $curRefText = trim((string)($refMsg['text'] ?? ''));
+                    if (is_array($savedOrig) && isset($savedOrig['t']) && trim((string)$savedOrig['t']) !== $curRefText) {
+                        $edits = [[
+                            'c'   => $replyCmid,
+                            'u'   => (int)($savedOrig['u'] ?? ($refMsg['from_id'] ?? 0)),
+                            'old' => (string)$savedOrig['t'],
+                            'new' => $curRefText !== '' ? $curRefText : '(пустой текст)',
+                            'ts'  => time(),
+                        ]];
+                    }
+                }
+
+                if (empty($edits)) {
+                    sendMessage($peerId, "ℹ️ Для выбранного сообщения (#{$replyCmid}) не зафиксировано редактирований.\n💡 Бот запоминает правки только для сообщений, отправленных и изменённых после включения события message_edit и последнего перезапуска бота.");
                     return true;
                 }
-                $authorId = (int)($edits[0]['u'] ?? ($msg['reply_message']['from_id'] ?? 0));
+                $authorId = (int)($edits[0]['u'] ?? ($refMsg['from_id'] ?? 0));
                 $authorStr = $authorId > 0 ? formatUserMention($pdo, $peerId, $authorId) : 'Участник';
                 $lines = [
                     "📝 История редактирования сообщения (#{$replyCmid})",

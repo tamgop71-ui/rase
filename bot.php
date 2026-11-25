@@ -35,14 +35,18 @@ if ($data['type'] === 'confirmation') {
 
 // 1.5. Фиксация редактирования сообщений для !историясоо (0 SQL-запросов, < 1 мс)
 if ($data['type'] === 'message_edit') {
-    $eMsg    = $data['object'] ?? [];
+    $obj     = $data['object'] ?? [];
+    $eMsg    = (isset($obj['message']) && is_array($obj['message'])) ? $obj['message'] : $obj;
     $ePeerId = (int)($eMsg['peer_id'] ?? 0);
     $eFromId = (int)($eMsg['from_id'] ?? 0);
-    $eCmid   = (int)($eMsg['conversation_message_id'] ?? 0);
+    $eCmid   = (int)($eMsg['conversation_message_id'] ?? ($eMsg['id'] ?? 0));
     $eText   = (string)($eMsg['text'] ?? '');
     if ($ePeerId > 0 && $eCmid > 0) {
         require_once __DIR__ . '/helpers.php';
         recordMessageEdit($ePeerId, $eCmid, $eFromId, $eText);
+        file_put_contents('php://stderr', "[MSG_EDIT] peer={$ePeerId} cmid={$eCmid} from={$eFromId}" . PHP_EOL);
+    } else {
+        file_put_contents('php://stderr', "[MSG_EDIT SKIP] raw=" . mb_substr($rawInput, 0, 250) . PHP_EOL);
     }
     exit('ok');
 }
@@ -239,9 +243,10 @@ if ($data['type'] === 'message_new') {
             exit('ok');
         }
 
-        // Сохраняем cmid в локальный /tmp буфер для !clear (0 SQL-запросов!)
-        if ($peerId > 2000000000 && $cmid > 0) {
-            recordRecentMessage($peerId, $cmid, $fromId, $text);
+        // Сохраняем cmid и исходный текст в локальный /tmp буфер для !clear и !историясоо (0 SQL-запросов!)
+        $saveId = $cmid > 0 ? $cmid : (int)($msg['id'] ?? 0);
+        if ($saveId > 0) {
+            recordRecentMessage($peerId, $saveId, $fromId, $text);
         }
 
         // 2.3. Автоснятие AFK при написании сообщения

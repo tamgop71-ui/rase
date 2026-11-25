@@ -1134,6 +1134,18 @@ function recordMessageEdit(int $peerId, int $cmid, int $fromId, string $newText)
     }
 }
 
+function getSavedOriginalMessage(int $peerId, int $cmid): ?array {
+    $msgFile = "/tmp/msgs_{$peerId}.json";
+    if (!is_file($msgFile)) return null;
+    $msgs = json_decode((string)@file_get_contents($msgFile), true) ?: [];
+    for ($i = count($msgs) - 1; $i >= 0; $i--) {
+        if ((int)($msgs[$i]['c'] ?? 0) === $cmid) {
+            return $msgs[$i];
+        }
+    }
+    return null;
+}
+
 function getMessageEdits(int $peerId, ?int $cmid = null, ?int $userId = null, int $limit = 10): array {
     $editFile = "/tmp/edits_{$peerId}.json";
     if (!is_file($editFile)) return [];
