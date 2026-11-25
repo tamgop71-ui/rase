@@ -33,6 +33,20 @@ if ($data['type'] === 'confirmation') {
     exit(VK_CONFIRMATION_TOKEN);
 }
 
+// 1.5. Фиксация редактирования сообщений для !историясоо (0 SQL-запросов, < 1 мс)
+if ($data['type'] === 'message_edit') {
+    $eMsg    = $data['object'] ?? [];
+    $ePeerId = (int)($eMsg['peer_id'] ?? 0);
+    $eFromId = (int)($eMsg['from_id'] ?? 0);
+    $eCmid   = (int)($eMsg['conversation_message_id'] ?? 0);
+    $eText   = (string)($eMsg['text'] ?? '');
+    if ($ePeerId > 0 && $eCmid > 0) {
+        require_once __DIR__ . '/helpers.php';
+        recordMessageEdit($ePeerId, $eCmid, $eFromId, $eText);
+    }
+    exit('ok');
+}
+
 // 2. Обработка входящего сообщения / события с глобальной защитой от HTTP 500
 if ($data['type'] === 'message_new') {
     try {
@@ -227,7 +241,7 @@ if ($data['type'] === 'message_new') {
 
         // Сохраняем cmid в локальный /tmp буфер для !clear (0 SQL-запросов!)
         if ($peerId > 2000000000 && $cmid > 0) {
-            recordRecentMessage($peerId, $cmid, $fromId);
+            recordRecentMessage($peerId, $cmid, $fromId, $text);
         }
 
         // 2.3. Автоснятие AFK при написании сообщения

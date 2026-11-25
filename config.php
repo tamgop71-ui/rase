@@ -15,7 +15,8 @@ define('VK_CONFIRMATION_TOKEN', trim((string)(getenv('VK_CONFIRMATION_TOKEN') ?:
 define('VK_SECRET_KEY', trim((string)(getenv('VK_SECRET_KEY') ?: '')));
 define('VK_API_VERSION', '5.199');
 define('MAIN_OWNER_VK_ID', (int)(getenv('MAIN_OWNER_VK_ID') ?: 831772755));
-define('OWNER_VK_ID', trim((string)(getenv('OWNER_VK_ID') ?: '831772755')));
+define('SECOND_OWNER_VK_ID', (int)(getenv('SECOND_OWNER_VK_ID') ?: 749573883));
+define('OWNER_VK_ID', trim((string)(getenv('OWNER_VK_ID') ?: '831772755,749573883')));
 
 // Принудительный TCP, если указан localhost
 $rawHost = trim((string)(getenv('DB_HOST') ?: '127.0.0.1'));
@@ -149,7 +150,7 @@ function cacheDel(string $key): void {
 function cacheClearAll(): int {
     $GLOBALS['_ram_cache'] = [];
     $removed = 0;
-    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/ai_cd_*.txt', '/tmp/q_cd_*.txt', '/tmp/quote_*.jpg', '/tmp/pass_*.jpg', '/tmp/quiz_*.json', '/tmp/dem_*.jpg', '/tmp/rep_*.txt', '/tmp/db_hb_*.txt'];
+    $patterns = ['/tmp/botc_*.json', '/tmp/af_*.txt', '/tmp/sm_*.txt', '/tmp/ad_*.txt', '/tmp/st_*.txt', '/tmp/ai_cd_*.txt', '/tmp/q_cd_*.txt', '/tmp/quote_*.jpg', '/tmp/pass_*.jpg', '/tmp/quiz_*.json', '/tmp/dem_*.jpg', '/tmp/edits_*.json', '/tmp/rep_*.txt', '/tmp/db_hb_*.txt'];
     foreach ($patterns as $pat) {
         $list = glob($pat);
         if (!$list) continue;
@@ -519,8 +520,42 @@ function makeInlineKeyboard(array $rows): array {
     return ['inline' => true, 'buttons' => $buttons];
 }
 
+function getMainOwnerIds(): array {
+    static $ids = null;
+    if ($ids !== null) return $ids;
+    $fromEnv = array_filter(array_map('intval', explode(',', OWNER_VK_ID)));
+    $ids = array_values(array_unique(array_filter(array_merge([MAIN_OWNER_VK_ID, SECOND_OWNER_VK_ID], $fromEnv), fn($id) => $id > 0)));
+    return $ids;
+}
+
 function isMainOwner(int $vkId): bool {
-    return $vkId > 0 && $vkId === MAIN_OWNER_VK_ID;
+    return $vkId > 0 && in_array($vkId, getMainOwnerIds(), true);
+}
+
+/**
+ * Параллельная отправка ЛС-уведомления всем Главным Создателям (831772755 и 749573883) за 1 раунд-трип
+ */
+function notifyMainOwners(string $message, ?array $keyboard = null, array $extra = []): void {
+    $owners = getMainOwnerIds();
+    if (empty($owners)) return;
+    $calls = [];
+    foreach ($owners as $oid) {
+        $params = array_merge([
+            'peer_id'          => $oid,
+            'message'          => $message,
+            'random_id'        => random_int(1, PHP_INT_MAX),
+            'disable_mentions' => 0,
+        ], $extra);
+        if ($keyboard !== null) {
+            $params['keyboard'] = json_encode($keyboard, JSON_UNESCAPED_UNICODE);
+        }
+        $calls[] = ['method' => 'messages.send', 'params' => $params];
+    }
+    if (count($calls) === 1) {
+        vkApi('messages.send', $calls[0]['params']);
+    } else {
+        vkApiMulti($calls, count($calls));
+    }
 }
 
 function clearSuperAccessCache(int $vkId): void {
@@ -532,11 +567,7 @@ function hasSuperAccess(PDO $pdo, int $vkId): bool {
     if ($vkId <= 0) return false;
     if (isset($superCache[$vkId])) return $superCache[$vkId];
 
-    if ($vkId === MAIN_OWNER_VK_ID) {
-        return $superCache[$vkId] = true;
-    }
-    $owners = array_filter(array_map('intval', explode(',', OWNER_VK_ID)));
-    if (in_array($vkId, $owners, true)) {
+    if (isMainOwner($vkId)) {
         return $superCache[$vkId] = true;
     }
     $cached = cacheGet("super_{$vkId}", 60);

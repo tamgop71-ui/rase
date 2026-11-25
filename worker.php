@@ -98,7 +98,7 @@ while (true) {
                     setSystemSetting($pdo, 'telemetry_last_slot', $slotKey);
                     $slotLabel = date('d.m.Y') . ' ' . sprintf('%02d:00', $curHour);
                     $reportText = buildTelemetryReport($pdo, true, $slotLabel);
-                    sendMessage(MAIN_OWNER_VK_ID, $reportText, null, ['disable_mentions' => 1]);
+                    notifyMainOwners($reportText, null, ['disable_mentions' => 1]);
                 }
             }
 

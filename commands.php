@@ -237,6 +237,9 @@ function getCommandAliasMap(): array {
         'промокоды' => 'promolist', 'promolist' => 'promolist', 'промолист' => 'promolist',
         'sysfind' => 'sysfind', 'сиспоиск' => 'sysfind', 'глобпоиск' => 'sysfind', 'найтиюзера' => 'sysfind',
         'serv' => 'serv', 'сервер' => 'serv', 'server' => 'serv', 'crmp' => 'serv', 'онлайнсервера' => 'serv',
+        'историясоо' => 'msghistory', 'редсоо' => 'msghistory', 'msghistory' => 'msghistory', 'edits' => 'msghistory',
+        'адмзов' => 'admzov', 'стаффзов' => 'admzov', 'admzov' => 'admzov',
+        'say' => 'say', 'сказать' => 'say',
         'паспорт' => 'passport', 'карта' => 'passport', 'passport' => 'passport',
         'викторина' => 'quiz', 'квиз' => 'quiz', 'quiz' => 'quiz',
         'норма' => 'norm', 'norm' => 'norm', 'нормаадм' => 'norm',
@@ -268,7 +271,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'stats' => 20, 'chatinfo' => 20, 'mute' => 20, 'unmute' => 20, 'kick' => 20,
         'warn' => 20, 'unwarn' => 20, 'getwarns' => 20, 'getwarn' => 20, 'warnlist' => 20, 'mutelist' => 20,
         'getban' => 20, 'getmute' => 20, 'nick' => 20, 'snick' => 20, 'rnick' => 20,
-        'nlist' => 20, 'nonames' => 20, 'checknicks' => 20, 'zov' => 20, 'reg' => 20, 'kpi' => 20, 'whois' => 20, 'vacation' => 20, 'vacations' => 20, 'daystats' => 20,
+        'nlist' => 20, 'nonames' => 20, 'checknicks' => 20, 'zov' => 20, 'admzov' => 40, 'reg' => 20, 'kpi' => 20, 'whois' => 20, 'vacation' => 20, 'vacations' => 20, 'daystats' => 20,
 
         // >= 40 (Модератор)
         'ban' => 40, 'unban' => 40, 'banlist' => 40, 'clear' => 40, 'helper' => 40,
@@ -298,7 +301,7 @@ function getDefaultCmdPriority(string $cmd): int {
         'listen' => 999, 'chatlist' => 999, 'userchats' => 999, 'ahistory' => 999, 'checkban' => 999,
         'sysban' => 999, 'sysunban' => 999, 'syskick' => 999, 'sysrole' => 999, 'sysnick' => 999,
         'giverub' => 999, 'givesoo' => 999, 'broadcast' => 999, 'botban' => 999, 'botunban' => 999,
-        'maintenance' => 999, 'sysstats' => 999, 'telemetry' => 999, 'createpromo' => 999, 'promolist' => 999, 'sysfind' => 999, 'serv' => 999, 'superreq' => 999, 'syslist' => 999, 'sysaudit' => 999, 'sysreset' => 999, 'sysunmute' => 999, 'sysleave' => 999, 'clearcache' => 999, 'koch' => 999,
+        'maintenance' => 999, 'sysstats' => 999, 'telemetry' => 999, 'createpromo' => 999, 'promolist' => 999, 'sysfind' => 999, 'serv' => 999, 'msghistory' => 999, 'say' => 999, 'superreq' => 999, 'syslist' => 999, 'sysaudit' => 999, 'sysreset' => 999, 'sysunmute' => 999, 'sysleave' => 999, 'clearcache' => 999, 'koch' => 999,
     ];
     return $priorities[$cmd] ?? 0;
 }

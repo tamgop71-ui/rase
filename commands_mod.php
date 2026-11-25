@@ -80,7 +80,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $aRole = $isSuper ? 'Супер-доступ' : getRoleName($pdo, $peerId, $myPriority);
             $tAcc = formatUserMention($pdo, $peerId, $targetId, 'acc');
             $tDat = formatUserMention($pdo, $peerId, $targetId, 'dat');
-            sendMessage($peerId, "🔇 {$aM} заглушил(а) {$tAcc}\n👮 Роль: {$aRole}\n⏳ Срок: {$minutes} мин. (до " . date('d.m.Y H:i', $expiresTs) . " МСК)\n📝 Причина: {$reason}");
+            $kb = makeInlineKeyboard([[['label' => '🔊 Снять мут', 'payload' => ['cmd' => "!unmute {$targetId}"], 'color' => 'positive']]]);
+            sendMessage($peerId, "🔇 {$aM} заглушил(а) {$tAcc}\n👮 Роль: {$aRole}\n⏳ Срок: {$minutes} мин. (до " . date('d.m.Y H:i', $expiresTs) . " МСК)\n📝 Причина: {$reason}", $kb);
             sendToLogChat($pdo, "Беседа {$peerId}: {$aM} выдал мут {$tDat} ({$minutes} мин). Причина: {$reason}");
             return true;
 
@@ -149,7 +150,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 }
             } else {
                 $tDat = formatUserMention($pdo, $peerId, $targetId, 'dat');
-                sendMessage($peerId, "⚠️ {$aM} выдал(а) предупреждение {$tDat} ({$wCount}/3)\n👮 Роль: {$aRole}\n📝 Причина: {$reason}");
+                $kb = makeInlineKeyboard([[['label' => '✅ Снять пред', 'payload' => ['cmd' => "!unwarn {$targetId}"], 'color' => 'positive']]]);
+                sendMessage($peerId, "⚠️ {$aM} выдал(а) предупреждение {$tDat} ({$wCount}/3)\n👮 Роль: {$aRole}\n📝 Причина: {$reason}", $kb);
             }
             sendToLogChat($pdo, "Беседа {$peerId}: {$aM} выдал варн ({$wCount}/3) " . formatUserMention($pdo, $peerId, $targetId, 'dat') . ". Причина: {$reason}");
             return true;
@@ -280,7 +282,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $tM = formatUserMention($pdo, $peerId, $targetId);
             $aM = formatUserMention($pdo, $peerId, $fromId);
             $tDat = formatUserMention($pdo, $peerId, $targetId, 'dat');
-            sendMessage($peerId, "🏷 {$aM} выдал(а) никнейм {$tDat}\n✏️ Никнейм: {$cleanNick}");
+            $kb = makeInlineKeyboard([[['label' => '🗑 Снять ник', 'payload' => ['cmd' => "!rnick {$targetId}"], 'color' => 'negative']]]);
+            sendMessage($peerId, "🏷 {$aM} выдал(а) никнейм {$tDat}\n✏️ Никнейм: {$cleanNick}", $kb);
             return true;
 
         case 'rnick':
@@ -401,7 +404,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $aM = formatUserMention($pdo, $peerId, $fromId);
             $aRole = $isSuper ? 'Супер-доступ' : getRoleName($pdo, $peerId, $myPriority);
             $tAcc = formatUserMention($pdo, $peerId, $targetId, 'acc');
-            sendMessage($peerId, "🔨 {$aM} заблокировал(а) {$tAcc} в беседе\n👮 Роль: {$aRole}\n⏳ Срок: {$days} дн. (до " . date('d.m.Y H:i', $expiresTs) . " МСК)\n📝 Причина: {$reason}");
+            $kb = makeInlineKeyboard([[['label' => '🔓 Снять бан', 'payload' => ['cmd' => "!unban {$targetId}"], 'color' => 'positive']]]);
+            sendMessage($peerId, "🔨 {$aM} заблокировал(а) {$tAcc} в беседе\n👮 Роль: {$aRole}\n⏳ Срок: {$days} дн. (до " . date('d.m.Y H:i', $expiresTs) . " МСК)\n📝 Причина: {$reason}", $kb);
             sendToLogChat($pdo, "Беседа {$peerId}: {$aM} забанил {$tAcc} ({$days} дн). Причина: {$reason}");
             checkAntiDrain($pdo, $peerId, $fromId, $myPriority, $isSuper, $ctx['chat']);
             return true;
@@ -487,7 +491,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $uM = formatUserMention($pdo, $peerId, $targetId);
             $aM = formatUserMention($pdo, $peerId, $fromId);
             $uDat = formatUserMention($pdo, $peerId, $targetId, 'dat');
-            sendMessage($peerId, "🛡 {$aM} выдал(а) роль «{$rName}» ({$newPriority}) {$uDat}");
+            $kb = ($newPriority > 0) ? makeInlineKeyboard([[['label' => '🛡 Снять роль', 'payload' => ['cmd' => "!removerole {$targetId}"], 'color' => 'negative']]]) : null;
+            sendMessage($peerId, "🛡 {$aM} выдал(а) роль «{$rName}» ({$newPriority}) {$uDat}", $kb);
             sendToLogChat($pdo, "Беседа {$peerId}: {$aM} выдал роль «{$rName}» ({$newPriority}) -> {$uM}");
             return true;
 
@@ -604,7 +609,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             unset($GLOBALS['_mention_cache']["{$peerId}:{$targetId}"], $GLOBALS['_mention_raw_cache']["{$peerId}:{$targetId}"]);
             $tM = formatUserMention($pdo, $peerId, $targetId);
             $aM = formatUserMention($pdo, $peerId, $fromId);
-            sendMessage($peerId, "🏷 Никнейм установлен в объединении (" . count($peers) . " бесед)\n👤 Пользователь: {$tM}\n✏️ Никнейм: {$cleanNick}\n👮 Выдал: {$aM}");
+            $kb = makeInlineKeyboard([[['label' => '🗑 Снять гник', 'payload' => ['cmd' => "!grnick {$targetId}"], 'color' => 'negative']]]);
+            sendMessage($peerId, "🏷 Никнейм установлен в объединении (" . count($peers) . " бесед)\n👤 Пользователь: {$tM}\n✏️ Никнейм: {$cleanNick}\n👮 Выдал: {$aM}", $kb);
             return true;
 
         case 'grnick':
@@ -656,7 +662,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $aM = formatUserMention($pdo, $peerId, $fromId);
             $aRole = $isSuper ? 'Супер-доступ' : getRoleName($pdo, $peerId, $myPriority);
             $uAcc = formatUserMention($pdo, $peerId, $targetId, 'acc');
-            sendMessage($peerId, "🔨 {$aM} заблокировал(а) {$uAcc} в объединении\n👮 Роль: {$aRole}\n⏳ Срок: {$days} дн. (до " . date('d.m.Y H:i', $expiresTs) . " МСК)\n💬 Бесед: " . count($peers) . "\n📝 Причина: {$reason}");
+            $kb = makeInlineKeyboard([[['label' => '🔓 Снять гбан', 'payload' => ['cmd' => "!gunban {$targetId}"], 'color' => 'positive']]]);
+            sendMessage($peerId, "🔨 {$aM} заблокировал(а) {$uAcc} в объединении\n👮 Роль: {$aRole}\n⏳ Срок: {$days} дн. (до " . date('d.m.Y H:i', $expiresTs) . " МСК)\n💬 Бесед: " . count($peers) . "\n📝 Причина: {$reason}", $kb);
             sendToLogChat($pdo, "GBAN: {$aM} -> {$uM} ({$days} дн). Причина: {$reason}");
             checkAntiDrain($pdo, $peerId, $fromId, $myPriority, $isSuper, $ctx['chat']);
             return true;
@@ -703,7 +710,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $uM = formatUserMention($pdo, $peerId, $targetId);
             $aM = formatUserMention($pdo, $peerId, $fromId);
             $uDat = formatUserMention($pdo, $peerId, $targetId, 'dat');
-            sendMessage($peerId, "🛡 {$aM} выдал(а) роль «{$rName}» ({$newPriority}) {$uDat} в объединении (" . count($peers) . " бесед)");
+            $kb = ($newPriority > 0) ? makeInlineKeyboard([[['label' => '🛡 Снять гроль', 'payload' => ['cmd' => "!gremoverole {$targetId}"], 'color' => 'negative']]]) : null;
+            sendMessage($peerId, "🛡 {$aM} выдал(а) роль «{$rName}» ({$newPriority}) {$uDat} в объединении (" . count($peers) . " бесед)", $kb);
             return true;
 
         case 'delmsg':
@@ -750,7 +758,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             } else {
                 $pdo->prepare("UPDATE bot_chat_members SET gm_granted_by = ?, gm_min_priority = ? WHERE peer_id = ? AND vk_id = ?")->execute([$fromId, $myPriority, $peerId, $targetId]);
                 $roleReq = getRoleName($pdo, $peerId, $myPriority);
-                sendMessage($peerId, "🛡 Выдан иммунитет от наказаний\n👤 Пользователь: {$uT}\n👮 Выдал: {$uA}\n🔒 Необходимая роль для взаимодействия: «{$roleReq}» ({$myPriority}) и выше.");
+                $kb = makeInlineKeyboard([[['label' => '🛡 Снять ГМ', 'payload' => ['cmd' => "!removegm {$targetId}"], 'color' => 'negative']]]);
+                sendMessage($peerId, "🛡 Выдан иммунитет от наказаний\n👤 Пользователь: {$uT}\n👮 Выдал: {$uA}\n🔒 Необходимая роль для взаимодействия: «{$roleReq}» ({$myPriority}) и выше.", $kb);
             }
             return true;
 
@@ -1322,10 +1331,14 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             return true;
 
         case 'addws':
+            if (!isMainOwner($fromId)) {
+                sendMessage($peerId, "⛔ Выдавать или снимать супер-доступ (/addws) могут только Создатели бота.");
+                return true;
+            }
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !addws [ID/ссылка]"); return true; }
             if (isMainOwner($targetId)) {
-                sendMessage($peerId, "⛔ Нельзя изменить статус супер-доступа Главного Создателя бота.");
+                sendMessage($peerId, "⛔ Нельзя изменить статус супер-доступа Создателя бота.");
                 return true;
             }
             $tCtx = ensureUserAndMember($pdo, $peerId, $targetId);
@@ -1334,9 +1347,12 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             clearSuperAccessCache($targetId);
             $uT = formatUserMention($pdo, $peerId, $targetId);
             $uA = formatUserMention($pdo, $peerId, $fromId);
+            $kb = makeInlineKeyboard([[
+                ['label' => $newS ? '❌ Снять супер-доступ' : '⚡ Выдать снова', 'payload' => ['cmd' => "!addws {$targetId}"], 'color' => $newS ? 'negative' : 'positive']
+            ]]);
             sendMessage($peerId, $newS
                 ? "⚡ Выдан супер-доступ (/addws)\n👤 Пользователь: {$uT}\n👑 Выдал: {$uA}"
-                : "⚡ Супер-доступ (/addws) отозван\n👤 Пользователь: {$uT}\n👑 Снял: {$uA}");
+                : "⚡ Супер-доступ (/addws) отозван\n👤 Пользователь: {$uT}\n👑 Снял: {$uA}", $kb);
             return true;
 
         case 'vip':
@@ -1965,7 +1981,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $uA = formatUserMention($pdo, $peerId, $fromId);
             $termStr = $days > 0 ? "на {$days} дн." : "Навсегда";
             $uTAcc = formatUserMention($pdo, $peerId, $targetId, 'acc');
-            sendMessage($peerId, "⛔ [SYSBAN] {$uA} системно заблокировал(а) {$uTAcc}\n⏳ Срок: {$termStr}\n👢 Исключён из бесед: {$kickedOk} из " . count($allChats) . "\n📝 Причина: {$reason}\n🔒 Вход в любые беседы бота закрыт.");
+            $kb = makeInlineKeyboard([[['label' => '🔓 Снять сисбан', 'payload' => ['cmd' => "!sysunban {$targetId}"], 'color' => 'positive']]]);
+            sendMessage($peerId, "⛔ [SYSBAN] {$uA} системно заблокировал(а) {$uTAcc}\n⏳ Срок: {$termStr}\n👢 Исключён из бесед: {$kickedOk} из " . count($allChats) . "\n📝 Причина: {$reason}\n🔒 Вход в любые беседы бота закрыт.", $kb);
             sendToLogChat($pdo, "SYSBAN: {$uA} -> {$uT} ({$termStr}). Кикнут из {$kickedOk} бесед. Причина: {$reason}");
             return true;
 
@@ -2199,9 +2216,10 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $val = ($cmd === 'botban') ? 1 : 0;
             $pdo->prepare("UPDATE bot_users SET is_bot_banned = ? WHERE vk_id = ?")->execute([$val, $targetId]);
             $uT = formatUserMention($pdo, $peerId, $targetId);
+            $kb = $val ? makeInlineKeyboard([[['label' => '🔓 Снять ботбан', 'payload' => ['cmd' => "!botunban {$targetId}"], 'color' => 'positive']]]) : null;
             sendMessage($peerId, $val
                 ? "🚫 Пользователю {$uT} полностью закрыт доступ ко всем командам бота."
-                : "✅ Пользователю {$uT} возвращён доступ к командам бота.");
+                : "✅ Пользователю {$uT} возвращён доступ к командам бота.", $kb);
             return true;
 
         case 'maintenance':
@@ -2313,13 +2331,12 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 . "⚠️ Активных варнов: {$warns}/3 | 🚫 Активных банов: {$bans}\n"
                 . "🏖 Отпуск: " . (!empty($m['vacation_until']) && strtotime($m['vacation_until']) > time() ? ('до ' . date('d.m.Y', strtotime($m['vacation_until'])) . ' (' . ($m['vacation_reason'] ?: 'без причины') . ')') : 'Нет') . "\n"
                 . "🔇 Мут сейчас: " . (!empty($m['is_muted']) ? 'Да' : 'Нет') . "\n"
-                . "✉️ Сообщений в чате: {$m['messages_count']} (Всего: {$g['total_messages']})", null, ['disable_mentions' => 1]);
+                . "✉️ Сообщений в чате: {$m['messages_count']} (Всего: {$g['total_messages']})", makeInlineKeyboard([[['label' => '🔇 Мут 15м', 'payload' => ['cmd' => "!mute {$targetId} 15"], 'color' => 'secondary'], ['label' => '⚠️ Пред', 'payload' => ['cmd' => "!warn {$targetId}"], 'color' => 'negative'], ['label' => '📜 История', 'payload' => ['cmd' => "!history {$targetId}"], 'color' => 'primary']]]), ['disable_mentions' => 1]);
             return true;
 
         case 'syslist':
             $rows = $pdo->query("SELECT vk_id FROM bot_users WHERE is_superadmin = 1 ORDER BY vk_id ASC LIMIT 50")->fetchAll(PDO::FETCH_COLUMN);
-            $owners = array_filter(array_map('intval', explode(',', OWNER_VK_ID)));
-            $all = array_values(array_unique(array_merge([MAIN_OWNER_VK_ID], $owners, array_map('intval', $rows))));
+            $all = array_values(array_unique(array_merge(getMainOwnerIds(), array_map('intval', $rows))));
             preloadUsers($pdo, $peerId, $all);
             $lines = ["⚡ Список пользователей с супер-доступом (" . count($all) . "):"];
             $i = 1;
@@ -2360,7 +2377,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $uT = formatUserMention($pdo, $peerId, $targetId);
             $uA = formatUserMention($pdo, $peerId, $fromId);
             $uTDat = formatUserMention($pdo, $peerId, $targetId, 'dat');
-            sendMessage($peerId, "⏳ {$uA} выдал(а) временную роль «{$rName}» ({$newPriority}) {$uTDat}\n📅 Срок: {$days} дн. (до " . date('d.m.Y H:i', $expTs) . " МСК)");
+            $kb = makeInlineKeyboard([[['label' => '🛡 Снять роль', 'payload' => ['cmd' => "!removerole {$targetId}"], 'color' => 'negative']]]);
+            sendMessage($peerId, "⏳ {$uA} выдал(а) временную роль «{$rName}» ({$newPriority}) {$uTDat}\n📅 Срок: {$days} дн. (до " . date('d.m.Y H:i', $expTs) . " МСК)", $kb);
             sendToLogChat($pdo, "Беседа {$peerId}: {$uA} выдал временную роль «{$rName}» ({$newPriority}) на {$days} дн. -> {$uT}");
             return true;
 
@@ -2842,8 +2860,8 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             }
             if ($sub === 'send' || $sub === 'лс') {
                 $rep = buildTelemetryReport($pdo, false);
-                sendMessage(MAIN_OWNER_VK_ID, $rep, null, ['disable_mentions' => 1]);
-                if ($peerId !== MAIN_OWNER_VK_ID) {
+                notifyMainOwners($rep, null, ['disable_mentions' => 1]);
+                if (!isMainOwner($peerId)) {
                     sendMessage($peerId, "📊 Текущая сводка статистики отправлена Создателю в ЛС (счётчик 4-часового периода не сброшен).");
                 }
                 return true;
@@ -2972,6 +2990,98 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $kb = makeInlineKeyboard([$kbRow]);
 
             sendMessage($peerId, implode("\n", $lines), $kb, ['dont_parse_links' => 1]);
+            return true;
+
+
+        case 'msghistory':
+            // Просмотр сообщения до редактирования (только супер-доступ, 0 SQL-запросов)
+            $replyCmid = (int)($msg['reply_message']['conversation_message_id'] ?? 0);
+            if ($replyCmid > 0) {
+                $edits = getMessageEdits($peerId, $replyCmid, null, 20);
+                if (empty($edits)) {
+                    sendMessage($peerId, "ℹ️ Для выбранного сообщения (#{$replyCmid}) не зафиксировано редактирований.\n(Убедитесь, что в Callback API группы ВК включено событие «Редактирование сообщения» / message_edit.)");
+                    return true;
+                }
+                $authorId = (int)($edits[0]['u'] ?? ($msg['reply_message']['from_id'] ?? 0));
+                $authorStr = $authorId > 0 ? formatUserMention($pdo, $peerId, $authorId) : 'Участник';
+                $lines = [
+                    "📝 История редактирования сообщения (#{$replyCmid})",
+                    "👤 Автор: {$authorStr}",
+                    "━━━━━━━━━━━━━━━━━━",
+                    "📌 Исходный текст:\n" . $edits[0]['old']
+                ];
+                $step = 1;
+                foreach ($edits as $ed) {
+                    $dt = date('d.m H:i:s', (int)$ed['ts']);
+                    $lines[] = "\n✏️ Изменение #{$step} ({$dt} МСК):\n" . $ed['new'];
+                    $step++;
+                }
+                sendLongMessage($peerId, implode("\n", $lines), null, ['disable_mentions' => 1]);
+                return true;
+            }
+
+            $targetId = trim($args) !== '' ? extractTargetUser($pdo, $peerId, $msg, $args) : null;
+            $edits = getMessageEdits($peerId, null, $targetId, 10);
+            if (empty($edits)) {
+                sendMessage($peerId, $targetId
+                    ? "ℹ️ У этого пользователя не зафиксировано отредактированных сообщений в текущей беседе."
+                    : "ℹ️ В этой беседе пока нет зафиксированных редактирований сообщений.\n💡 Ответьте на отредактированное сообщение командой !историясоо, чтобы увидеть его оригинал.");
+                return true;
+            }
+
+            $uids = array_values(array_unique(array_filter(array_map(fn($e) => (int)($e['u'] ?? 0), $edits))));
+            if (!empty($uids)) preloadUsers($pdo, $peerId, $uids);
+
+            $lines = [$targetId
+                ? ("📝 Последние редактирования " . formatUserMention($pdo, $peerId, $targetId, 'gen') . ":")
+                : "📝 Последние отредактированные сообщения беседы (" . count($edits) . "):"
+            ];
+            $i = 1;
+            foreach ($edits as $ed) {
+                $dt = date('d.m H:i', (int)$ed['ts']);
+                $uStr = !empty($ed['u']) ? formatUserMention($pdo, $peerId, (int)$ed['u']) : 'Участник';
+                $oldShort = mb_strlen($ed['old']) > 140 ? (mb_substr($ed['old'], 0, 137) . '...') : $ed['old'];
+                $newShort = mb_strlen($ed['new']) > 140 ? (mb_substr($ed['new'], 0, 137) . '...') : $ed['new'];
+                $lines[] = "{$i}. [{$dt}] {$uStr}:\n   Было: {$oldShort}\n   Стало: {$newShort}";
+                $i++;
+            }
+            sendLongMessage($peerId, implode("\n", $lines), null, ['disable_mentions' => 1]);
+            return true;
+
+        case 'admzov':
+            if ($peerId <= 2000000000) {
+                sendMessage($peerId, "ℹ️ Команда !адмзов работает только в групповых беседах.");
+                return true;
+            }
+            $reason = trim($args) !== '' ? trim($args) : 'Срочный сбор администрации!';
+            $stmt = $pdo->prepare("SELECT vk_id FROM bot_chat_members WHERE peer_id = ? AND role_priority > 0 ORDER BY role_priority DESC LIMIT 50");
+            $stmt->execute([$peerId]);
+            $staffIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+            if (empty($staffIds)) {
+                sendMessage($peerId, "ℹ️ В этой беседе нет назначенной администрации.");
+                return true;
+            }
+            $mentions = array_map(fn($u) => "[id{$u}|🛡]", $staffIds);
+            $caller = formatUserMention($pdo, $peerId, $fromId, 'gen');
+            sendMessage($peerId, "🚨 Вызов администрации от {$caller} (" . count($staffIds) . " чел.)!\n💬 {$reason}\n\n" . implode(' ', $mentions));
+            return true;
+
+        case 'say':
+            $raw = trim($args);
+            if ($raw === '') {
+                sendMessage($peerId, "🗣 Использование:\n• /say [текст] — сказать от имени бота в этой беседе\n• /say [ID_беседы] [текст] — отправить в указанную беседу");
+                return true;
+            }
+            if (preg_match('/^(\d{1,12})\s+(.+)$/su', $raw, $sm)) {
+                $tp = (int)$sm[1];
+                if ($tp > 0 && $tp < 2000000000) $tp += 2000000000;
+                $sayText = trim($sm[2]);
+                sendMessage($tp, $sayText);
+                sendMessage($peerId, "✅ Сообщение отправлено в беседу {$tp}.");
+                return true;
+            }
+            $delIds = (!empty($msg['conversation_message_id']) && $peerId > 2000000000) ? [(int)$msg['conversation_message_id']] : [];
+            deleteAndSend($peerId, $delIds, $raw);
             return true;
 
     }

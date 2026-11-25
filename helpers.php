@@ -675,7 +675,7 @@ function requestSuperApproval(PDO $pdo, int $peerId, int $actorId, int $targetId
         ['label' => '❌ Отклонить', 'payload' => ['cmd' => "!superreq deny {$reqId}"], 'color' => 'negative']
     ]]);
 
-    sendMessage(MAIN_OWNER_VK_ID, $dmText, $kb);
+    notifyMainOwners($dmText, $kb);
     if ($actionType === 'zovvv') {
         sendMessage($peerId, "🛡 Для выполнения глобального вызова /zovvv требуется одобрение Создателя бота.\n📩 Запрос #{$reqId} отправлен Создателю в ЛС. Ожидайте решения.");
     } else {
@@ -1047,18 +1047,104 @@ function getChatTriggers(PDO $pdo, int $peerId): array {
 /**
  * Сверхбыстрый локальный буфер последних сообщений для !clear (0 SQL-запросов!)
  */
-function recordRecentMessage(int $peerId, int $cmid, int $fromId): void {
+function recordRecentMessage(int $peerId, int $cmid, int $fromId, string $text = ''): void {
     $file = "/tmp/msgs_{$peerId}.json";
     $list = [];
     if (is_file($file)) {
         $raw = @file_get_contents($file);
         if ($raw) $list = json_decode($raw, true) ?: [];
     }
-    $list[] = ['c' => $cmid, 'u' => $fromId];
-    if (count($list) > 120) {
-        $list = array_slice($list, -120);
+    $entry = ['c' => $cmid, 'u' => $fromId, 'ts' => time()];
+    if ($text !== '') {
+        $entry['t'] = mb_substr($text, 0, 1000);
     }
-    $tmp = $file . '.' . getmypid() . '.tmp'; if (@file_put_contents($tmp, json_encode($list)) !== false) @rename($tmp, $file);
+    $list[] = $entry;
+    if (count($list) > 200) {
+        $list = array_slice($list, -200);
+    }
+    $tmp = $file . '.' . getmypid() . '.tmp';
+    if (@file_put_contents($tmp, json_encode($list, JSON_UNESCAPED_UNICODE)) !== false) {
+        @rename($tmp, $file);
+    }
+}
+
+/**
+ * Сохраняет историю редактирования сообщения (0 SQL-запросов, lock-free /tmp)
+ */
+function recordMessageEdit(int $peerId, int $cmid, int $fromId, string $newText): void {
+    if ($peerId <= 0 || $cmid <= 0) return;
+    $newText = mb_substr(trim($newText), 0, 1000);
+
+    // 1. Ищем предыдущий текст в буфере последних сообщений чата и обновляем его на новый
+    $msgFile = "/tmp/msgs_{$peerId}.json";
+    $oldText = null;
+    $msgs = [];
+    if (is_file($msgFile)) {
+        $msgs = json_decode((string)@file_get_contents($msgFile), true) ?: [];
+        for ($i = count($msgs) - 1; $i >= 0; $i--) {
+            if ((int)($msgs[$i]['c'] ?? 0) === $cmid) {
+                $oldText = (string)($msgs[$i]['t'] ?? '');
+                $msgs[$i]['t'] = $newText;
+                if ($fromId <= 0 && !empty($msgs[$i]['u'])) {
+                    $fromId = (int)$msgs[$i]['u'];
+                }
+                break;
+            }
+        }
+        $tmpM = $msgFile . '.' . getmypid() . '.tmp';
+        if (@file_put_contents($tmpM, json_encode($msgs, JSON_UNESCAPED_UNICODE)) !== false) {
+            @rename($tmpM, $msgFile);
+        }
+    }
+
+    // 2. Пишем запись в журнал редактирований /tmp/edits_{$peerId}.json
+    $editFile = "/tmp/edits_{$peerId}.json";
+    $edits = [];
+    if (is_file($editFile)) {
+        $edits = json_decode((string)@file_get_contents($editFile), true) ?: [];
+    }
+
+    // Если не нашли в буфере последних 200 сообщений, пробуем взять последний 'new' из журнала редактирований
+    if ($oldText === null) {
+        for ($i = count($edits) - 1; $i >= 0; $i--) {
+            if ((int)($edits[$i]['c'] ?? 0) === $cmid) {
+                $oldText = (string)($edits[$i]['new'] ?? '');
+                break;
+            }
+        }
+    }
+
+    if ($oldText === $newText && $oldText !== null) {
+        return; // текст не изменился (например, изменили только вложение)
+    }
+
+    $edits[] = [
+        'c'   => $cmid,
+        'u'   => $fromId,
+        'old' => $oldText ?? '(оригинал не сохранился в кэше)',
+        'new' => $newText !== '' ? $newText : '(пустой текст)',
+        'ts'  => time(),
+    ];
+    if (count($edits) > 120) {
+        $edits = array_slice($edits, -120);
+    }
+    $tmpE = $editFile . '.' . getmypid() . '.tmp';
+    if (@file_put_contents($tmpE, json_encode($edits, JSON_UNESCAPED_UNICODE)) !== false) {
+        @rename($tmpE, $editFile);
+    }
+}
+
+function getMessageEdits(int $peerId, ?int $cmid = null, ?int $userId = null, int $limit = 10): array {
+    $editFile = "/tmp/edits_{$peerId}.json";
+    if (!is_file($editFile)) return [];
+    $edits = json_decode((string)@file_get_contents($editFile), true) ?: [];
+    if ($cmid !== null) {
+        return array_values(array_filter($edits, fn($e) => (int)($e['c'] ?? 0) === $cmid));
+    }
+    if ($userId !== null) {
+        $edits = array_values(array_filter($edits, fn($e) => (int)($e['u'] ?? 0) === $userId));
+    }
+    return array_slice(array_reverse($edits), 0, $limit);
 }
 
 function popRecentMessages(int $peerId, ?int $targetId, int $limit): array {
