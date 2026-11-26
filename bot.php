@@ -108,6 +108,12 @@ if ($data['type'] === 'message_new') {
                 exit('ok');
             }
 
+            // Выход или исключение участника из беседы -> автоматически снимаем ник и роль
+            if ($actType === 'chat_kick_user' && $actMemberId > 0 && $peerId > 2000000000) {
+                resetMemberOnLeave($pdo, $peerId, $actMemberId);
+                exit('ok');
+            }
+
             // Пригласили самого бота (member_id < 0)
             if ($actType === 'chat_invite_user' && $actMemberId < 0) {
                 ensureUserAndMember($pdo, $peerId, $fromId);
@@ -220,6 +226,19 @@ if ($data['type'] === 'message_new') {
                     }
                 }
 
+                // 4) Анти-обход мута: если у вернувшегося участника есть активный мут — сразу возвращаем системный мут ВК
+                if ($peerId > 2000000000) {
+                    $stActiveMute = $pdo->prepare("SELECT expires_at FROM bot_punishments WHERE peer_id = ? AND target_vk_id = ? AND type = 'mute' AND is_active = 1 AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY id DESC LIMIT 1");
+                    $stActiveMute->execute([$peerId, $actMemberId]);
+                    $muteExp = $stActiveMute->fetchColumn();
+                    if ($muteExp !== false) {
+                        $remSec = $muteExp ? max(60, strtotime((string)$muteExp) - time()) : 3600;
+                        vkSystemMute($peerId, $actMemberId, $remSec);
+                        $remMin = max(1, (int)ceil($remSec / 60));
+                        sendMessage($peerId, "🔇 У " . formatUserMention($pdo, $peerId, $actMemberId, 'gen') . " сохраняется активный системный мут (осталось ~{$remMin} мин.).", null, ['disable_mentions' => 1]);
+                    }
+                }
+
                 $welcome = trim((string)($ctxJoin['chat']['welcome_text'] ?? ''));
                 if ($welcome !== '') {
                     sendMessage($peerId, "👋 " . formatUserMention($pdo, $peerId, $actMemberId) . ", " . $welcome);
@@ -292,6 +311,7 @@ if ($data['type'] === 'message_new') {
                     $expires = date('Y-m-d H:i:s', time() + 300);
                     $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, 0, 'mute', 'Антифлуд (автомут)', 1, ?)")
                         ->execute([$peerId, $fromId, $expires]);
+                    vkSystemMute($peerId, $fromId, 300);
                     deleteAndSend($peerId, $cmid > 0 ? [$cmid] : [], "🌊 " . formatUserMention($pdo, $peerId, $fromId) . " получил(а) автомут на 5 мин. за флуд!");
                     exit('ok');
                 }

@@ -71,7 +71,11 @@ while (true) {
 
         // 3. Раз в минуту: истёкшие муты/баны, отпуска, временные роли, таймеры и ежедневные отчёты
         if ($tick % 4 === 0) {
+            $expMutes = $pdo->query("SELECT peer_id, target_vk_id FROM bot_punishments WHERE is_active = 1 AND type = 'mute' AND peer_id > 2000000000 AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 25")->fetchAll();
             $pdo->query("UPDATE bot_punishments SET is_active = 0 WHERE is_active = 1 AND expires_at IS NOT NULL AND expires_at <= NOW()");
+            foreach ($expMutes as $em) {
+                vkSystemUnmute((int)$em['peer_id'], (int)$em['target_vk_id']);
+            }
             $pdo->query("UPDATE bot_chat_members SET vacation_until = NULL, vacation_reason = NULL WHERE vacation_until IS NOT NULL AND vacation_until <= NOW()");
 
             // Автоснятие истёкших временных ролей (!temprole)
@@ -145,6 +149,59 @@ while (true) {
                         vkApiMulti($calls, 10);
                     }
                 }
+            }
+        }
+
+        // 3.5. Раз в 2 минуты: авто-мониторинг CRMP-сервера (уведомление Создателям при падении/поднятии)
+        if ($tick % 8 === 0 && (int)getSystemSetting($pdo, 'crmp_monitor_enabled', '1') === 1) {
+            require_once __DIR__ . '/samp_query.php';
+            $stFile = '/tmp/crmp_mon_state.json';
+            $monState = is_file($stFile) ? (json_decode((string)@file_get_contents($stFile), true) ?: []) : [];
+            $wasDown = !empty($monState['down']);
+            $fails   = (int)($monState['fails'] ?? 0);
+            $downAt  = (int)($monState['down_at'] ?? 0);
+
+            $q = querySampServer(DEFAULT_CRMP_IP, DEFAULT_CRMP_PORT, false);
+            if (!empty($q['online'])) {
+                if ($wasDown) {
+                    $downSec = $downAt > 0 ? max(1, time() - $downAt) : 0;
+                    $mins = (int)floor($downSec / 60);
+                    $secs = $downSec % 60;
+                    $durText = $mins > 0 ? "{$mins} мин. {$secs} сек." : "{$secs} сек.";
+                    notifyMainOwners(
+                        "🟢 [МОНИТОРИНГ CRMP] Сервер снова ОНЛАЙН!\n"
+                        . "━━━━━━━━━━━━━━━━━━\n"
+                        . "🌐 Адрес: " . DEFAULT_CRMP_IP . ":" . DEFAULT_CRMP_PORT . "\n"
+                        . "🏷 Название: {$q['hostname']}\n"
+                        . "👥 Онлайн: {$q['players']} / {$q['max_players']}\n"
+                        . "⏱ Время простоя: {$durText}\n"
+                        . "🕒 " . date('d.m.Y H:i:s') . " МСК",
+                        null,
+                        ['disable_mentions' => 1]
+                    );
+                }
+                $monState = ['down' => false, 'fails' => 0, 'down_at' => 0];
+            } else {
+                $fails++;
+                if (!$wasDown && $fails >= 2) {
+                    $wasDown = true;
+                    $downAt = time();
+                    notifyMainOwners(
+                        "🔴 [МОНИТОРИНГ CRMP] ВНИМАНИЕ! Сервер перестал отвечать!\n"
+                        . "━━━━━━━━━━━━━━━━━━\n"
+                        . "🌐 Адрес: " . DEFAULT_CRMP_IP . ":" . DEFAULT_CRMP_PORT . "\n"
+                        . "⚠️ Причина: " . (string)($q['error'] ?? 'нет ответа по UDP') . "\n"
+                        . "🕒 Зафиксировано: " . date('d.m.Y H:i:s') . " МСК\n"
+                        . "Отключить оповещения: /servmonitor",
+                        null,
+                        ['disable_mentions' => 1]
+                    );
+                }
+                $monState = ['down' => $wasDown, 'fails' => $fails, 'down_at' => $downAt];
+            }
+            $tmpMon = $stFile . '.' . getmypid() . '.tmp';
+            if (@file_put_contents($tmpMon, json_encode($monState)) !== false) {
+                @rename($tmpMon, $stFile);
             }
         }
 

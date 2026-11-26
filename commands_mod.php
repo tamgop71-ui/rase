@@ -75,13 +75,17 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type = 'mute'")->execute([$peerId, $targetId]);
             $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active, expires_at) VALUES (?, ?, ?, 'mute', ?, 1, ?)")
                 ->execute([$peerId, $targetId, $fromId, mb_substr($reason, 0, 250), $expires]);
+            $sysMuteRes = vkSystemMute($peerId, $targetId, $minutes * 60);
+            $muteModeNote = $sysMuteRes['ok']
+                ? "\n🔒 Системный мут ВК: доступ к отправке сообщений закрыт"
+                : "\n🛡 Режим мута: автоудаление сообщений (бот не смог выдать системный мут — проверьте права админа)";
             $tM = formatUserMention($pdo, $peerId, $targetId);
             $aM = formatUserMention($pdo, $peerId, $fromId);
             $aRole = $isSuper ? 'Супер-доступ' : getRoleName($pdo, $peerId, $myPriority);
             $tAcc = formatUserMention($pdo, $peerId, $targetId, 'acc');
             $tDat = formatUserMention($pdo, $peerId, $targetId, 'dat');
             $kb = makeInlineKeyboard([[['label' => '🔊 Снять мут', 'payload' => ['cmd' => "!unmute {$targetId}"], 'color' => 'positive']]]);
-            sendMessage($peerId, "🔇 {$aM} заглушил(а) {$tAcc}\n👮 Роль: {$aRole}\n⏳ Срок: {$minutes} мин. (до " . date('d.m.Y H:i', $expiresTs) . " МСК)\n📝 Причина: {$reason}", $kb);
+            sendMessage($peerId, "🔇 {$aM} заглушил(а) {$tAcc}\n👮 Роль: {$aRole}\n⏳ Срок: {$minutes} мин. (до " . date('d.m.Y H:i', $expiresTs) . " МСК)\n📝 Причина: {$reason}{$muteModeNote}", $kb);
             sendToLogChat($pdo, "Беседа {$peerId}: {$aM} выдал мут {$tDat} ({$minutes} мин). Причина: {$reason}");
             return true;
 
@@ -89,6 +93,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !унмут [ID/упоминание]"); return true; }
             $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE peer_id = ? AND target_vk_id = ? AND type = 'mute'")->execute([$peerId, $targetId]);
+            vkSystemUnmute($peerId, $targetId);
             $tM = formatUserMention($pdo, $peerId, $targetId);
             $aM = formatUserMention($pdo, $peerId, $fromId);
             $tGen = formatUserMention($pdo, $peerId, $targetId, 'gen');
@@ -111,6 +116,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 ->execute([$peerId, $targetId, $fromId, mb_substr($reason, 0, 250)]);
             if ($peerId > 2000000000) {
                 vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $targetId]);
+                resetMemberOnLeave($pdo, $peerId, $targetId);
             }
             $tM = formatUserMention($pdo, $peerId, $targetId);
             $aM = formatUserMention($pdo, $peerId, $fromId);
@@ -399,6 +405,7 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 ->execute([$peerId, $targetId, $fromId, mb_substr($reason, 0, 250), $expires]);
             if ($peerId > 2000000000) {
                 vkApi('messages.removeChatUser', ['chat_id' => $peerId - 2000000000, 'member_id' => $targetId]);
+                resetMemberOnLeave($pdo, $peerId, $targetId);
             }
             $tM = formatUserMention($pdo, $peerId, $targetId);
             $aM = formatUserMention($pdo, $peerId, $fromId);
@@ -2284,6 +2291,9 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 $uActor = formatUserMention($pdo, (int)$req['peer_id'], (int)$req['actor_vk_id'], 'gen');
                 if ($req['action_type'] === 'zovvv') {
                     sendMessage((int)$req['peer_id'], "❌ Создатель бота отклонил запрос #{$reqId} от {$uActor} на глобальный вызов /zovvv.");
+                } elseif ($req['action_type'] === 'star' || $req['action_type'] === 'unstar') {
+                    $uTarget = formatUserMention($pdo, (int)$req['peer_id'], (int)$req['target_vk_id']);
+                    sendMessage((int)$req['peer_id'], "❌ Создатель бота отклонил запрос #{$reqId} от {$uActor} на !звезда ({$uTarget}).");
                 } else {
                     $uTarget = formatUserMention($pdo, (int)$req['peer_id'], (int)$req['target_vk_id'], 'gen');
                     sendMessage((int)$req['peer_id'], "❌ Создатель бота отклонил запрос #{$reqId} от {$uActor} на действие против {$uTarget}.");
@@ -2641,8 +2651,17 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
         case 'sysunmute':
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: /sysunmute [ID/ссылка]"); return true; }
+            $stMutePeers = $pdo->prepare("SELECT DISTINCT peer_id FROM bot_punishments WHERE target_vk_id = ? AND type = 'mute' AND is_active = 1 AND peer_id > 2000000000");
+            $stMutePeers->execute([$targetId]);
+            $mutedPeers = array_map('intval', $stMutePeers->fetchAll(PDO::FETCH_COLUMN));
             $stmt = $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE target_vk_id = ? AND type = 'mute' AND is_active = 1");
             $stmt->execute([$targetId]);
+            foreach ($mutedPeers as $mp) {
+                vkSystemUnmute($mp, $targetId);
+            }
+            if ($peerId > 2000000000 && !in_array($peerId, $mutedPeers, true)) {
+                vkSystemUnmute($peerId, $targetId);
+            }
             $uT = formatUserMention($pdo, $peerId, $targetId);
             $uA = formatUserMention($pdo, $peerId, $fromId);
             sendMessage($peerId, "🔊 [SYSUNMUTE] Все муты сняты по всем беседам\n👤 Пользователь: {$uT}\n👑 Снял: {$uA}\n📋 Снято мутов: " . $stmt->rowCount());
@@ -3099,6 +3118,61 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             }
             $delIds = (!empty($msg['conversation_message_id']) && $peerId > 2000000000) ? [(int)$msg['conversation_message_id']] : [];
             deleteAndSend($peerId, $delIds, $raw);
+            return true;
+
+
+        case 'star':
+        case 'unstar':
+            if ($peerId <= 2000000000) {
+                sendMessage($peerId, "ℹ️ Команда !звезда работает только в групповых беседах.");
+                return true;
+            }
+            $rawArgs = trim($args);
+            $isRemove = ($cmd === 'unstar') || (bool)preg_match('/\b(снять|убрать|удалить|off|remove|member|0)\b/iu', $rawArgs);
+            $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
+            if (!$targetId) {
+                sendMessage($peerId, "⭐ Использование:\n• !звезда [ID/упоминание] — выдать звезду (админку ВК) в беседе\n• !звезда [ID/упоминание] снять — снять звезду в беседе");
+                return true;
+            }
+            if ($isRemove && isMainOwner($targetId) && !isMainOwner($fromId)) {
+                sendMessage($peerId, "⛔ Нельзя снять звезду с Создателя бота.");
+                return true;
+            }
+
+            // Для супер-доступа (не Главных Создателей) требуется одобрение владельцев (831772755 / 749573883)
+            if (!isMainOwner($fromId)) {
+                requestSuperApproval($pdo, $peerId, $fromId, $targetId, $isRemove ? 'unstar' : 'star', 0, $isRemove ? 'Снятие звезды в беседе' : 'Выдача звезды в беседе');
+                return true;
+            }
+
+            $stRes = vkSetChatStar($peerId, $targetId, !$isRemove);
+            if (!$stRes['ok']) {
+                $hint = in_array($stRes['code'], [7, 15, 925], true)
+                    ? "\n💡 Убедитесь, что бот является создателем или администратором этой беседы (а цель не является создателем чата)."
+                    : "";
+                sendMessage($peerId, "⚠️ Не удалось изменить звезду в беседе ВК (код {$stRes['code']}).{$hint}");
+                return true;
+            }
+
+            $uA = formatUserMention($pdo, $peerId, $fromId);
+            $uTDat = formatUserMention($pdo, $peerId, $targetId, 'dat');
+            $uTGen = formatUserMention($pdo, $peerId, $targetId, 'gen');
+            $kb = makeInlineKeyboard([[
+                ['label' => $isRemove ? '⭐ Выдать звезду' : '❌ Снять звезду', 'payload' => ['cmd' => $isRemove ? "!звезда {$targetId}" : "!звезда {$targetId} снять"], 'color' => $isRemove ? 'positive' : 'negative']
+            ]]);
+            sendMessage($peerId, $isRemove
+                ? "⭐ {$uA} снял(а) звезду (админку ВК) с {$uTGen}"
+                : "⭐ {$uA} выдал(а) звезду (админку ВК) {$uTDat}", $kb);
+            sendToLogChat($pdo, "Беседа {$peerId}: {$uA} " . ($isRemove ? "снял звезду с" : "выдал звезду") . " " . formatUserMention($pdo, $peerId, $targetId) . ".");
+            return true;
+
+        case 'servmonitor':
+            $cur = (int)getSystemSetting($pdo, 'crmp_monitor_enabled', '1');
+            $new = $cur ? '0' : '1';
+            setSystemSetting($pdo, 'crmp_monitor_enabled', $new);
+            sendMessage($peerId, $new === '1'
+                ? "🟢 Авто-мониторинг CRMP-сервера (80.242.59.112:7609) ВКЛЮЧЁН! При падении или поднятии сервера уведомления придут Создателям в ЛС."
+                : "🔴 Авто-мониторинг CRMP-сервера ОТКЛЮЧЁН.");
             return true;
 
     }

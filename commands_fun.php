@@ -105,7 +105,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                      . "• !unity / !unites / !createunity / !addunity / !editunity / !removeunity / !deleteunity\n"
                      . "• !sync / !spec / !gspec / !wipe / !migration / !clone [ID]\n"
                      . "• !editcmd / !geditcmd / !owner [ID] / !никэмодзи\n"
-                     . "• Супер-доступ: /sysban, /sysunban, /syskick, /sysrole, /sysnick, /giverub, /givesoo, /broadcast, /botban, /botunban, /serv, /историясоо, /say, /sysstats, /telemetry, /sysfind, /создатьпромо, /promolist, /sysaudit, /sysreset, /sysunmute, /sysleave, /clearcache, /syslist, /maintenance, !addws, !vip, !setlog, !zovvv, !gzovg, !gtimeuvedg, !listunities, !listen, !chatlist, !userchats, !ahistory, !checkban";
+                     . "• Супер-доступ: /sysban, /sysunban, /syskick, /sysrole, /sysnick, /giverub, /givesoo, /broadcast, /botban, /botunban, /звезда, /serv, /servmonitor, /историясоо, /say, /sysstats, /telemetry, /sysfind, /создатьпромо, /promolist, /sysaudit, /sysreset, /sysunmute, /sysleave, /clearcache, /syslist, /maintenance, !addws, !vip, !setlog, !zovvv, !gzovg, !gtimeuvedg, !listunities, !listen, !chatlist, !userchats, !ahistory, !checkban";
             } else {
                 $txt = "📋 Справка по командам RASE RUSSIA BOT:\n"
                      . "Префиксы: ! / . + - (на русском и английском)\n\n"
@@ -1549,6 +1549,7 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
                 'member_id' => $fromId,
             ]);
             if (isset($res['response']) && (int)$res['response'] === 1) {
+                resetMemberOnLeave($pdo, $peerId, $fromId);
                 $reasonStr = $reason !== '' ? ("\n💬 Прощальные слова: " . mb_substr($reason, 0, 150)) : "";
                 sendMessage($peerId, "👋 {$uActor} покинул(а) беседу по собственному желанию (/q).{$reasonStr}", null, ['disable_mentions' => 1]);
             } else {
