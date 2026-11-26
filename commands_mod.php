@@ -3128,12 +3128,23 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
                 return true;
             }
             $rawArgs = trim($args);
-            $isRemove = ($cmd === 'unstar') || (bool)preg_match('/\b(снять|убрать|удалить|off|remove|member|0)\b/iu', $rawArgs);
-            $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
-            if (!$targetId) {
-                sendMessage($peerId, "⭐ Использование:\n• !звезда [ID/упоминание] — выдать звезду (админку ВК) в беседе\n• !звезда [ID/упоминание] снять — снять звезду в беседе");
-                return true;
+            $isRemove = ($cmd === 'unstar') || (bool)preg_match('/(?:^|\s)(снять|убрать|удалить|off|remove|member|0)(?:$|\s)/iu', $rawArgs);
+
+            // Если вызвали без указания цели (!звезда / !звезда мне / !звезда снять) — применяем на самого автора команды
+            $cleanTargetArgs = trim((string)preg_replace('/(?:^|\s)(снять|убрать|удалить|off|remove|member|0|мне|я|себе|себя|me|self)(?:$|\s)/iu', ' ', $rawArgs));
+            $targetId = null;
+            if ($cleanTargetArgs !== '' || !empty($msg['reply_message']['from_id']) || !empty($msg['fwd_messages'][0]['from_id'])) {
+                $targetId = extractTargetUser($pdo, $peerId, $msg, $cleanTargetArgs);
             }
+            if (!$targetId) {
+                if ($cleanTargetArgs === '') {
+                    $targetId = $fromId;
+                } else {
+                    sendMessage($peerId, "⭐ Использование:\n• !звезда — выдать звезду (админку ВК) себе\n• !звезда [ID/упоминание] — выдать звезду участнику\n• !звезда [ID/упоминание] снять — снять звезду");
+                    return true;
+                }
+            }
+
             if ($isRemove && isMainOwner($targetId) && !isMainOwner($fromId)) {
                 sendMessage($peerId, "⛔ Нельзя снять звезду с Создателя бота.");
                 return true;
@@ -3147,10 +3158,11 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
 
             $stRes = vkSetChatStar($peerId, $targetId, !$isRemove);
             if (!$stRes['ok']) {
+                $vkErr = $stRes['msg'] !== '' ? ("\n📋 Ответ ВК: " . $stRes['msg']) : "";
                 $hint = in_array($stRes['code'], [7, 15, 925], true)
-                    ? "\n💡 Убедитесь, что бот является создателем или администратором этой беседы (а цель не является создателем чата)."
+                    ? "\n💡 ВКонтакте разрешает боту выдавать звезду только если:\n1) Бот является админом/создателем чата;\n2) В настройках беседы ВК («Управление чатом → Права») назначение администраторов разрешено администраторам (или чат создан от имени группы бота)."
                     : "";
-                sendMessage($peerId, "⚠️ Не удалось изменить звезду в беседе ВК (код {$stRes['code']}).{$hint}");
+                sendMessage($peerId, "⚠️ Не удалось изменить звезду в беседе ВК (код {$stRes['code']}).{$vkErr}{$hint}");
                 return true;
             }
 
@@ -3160,9 +3172,16 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             $kb = makeInlineKeyboard([[
                 ['label' => $isRemove ? '⭐ Выдать звезду' : '❌ Снять звезду', 'payload' => ['cmd' => $isRemove ? "!звезда {$targetId}" : "!звезда {$targetId} снять"], 'color' => $isRemove ? 'positive' : 'negative']
             ]]);
-            sendMessage($peerId, $isRemove
-                ? "⭐ {$uA} снял(а) звезду (админку ВК) с {$uTGen}"
-                : "⭐ {$uA} выдал(а) звезду (админку ВК) {$uTDat}", $kb);
+            if ($targetId === $fromId) {
+                $msgText = $isRemove
+                    ? "⭐ {$uA} снял(а) с себя звезду (админку ВК)"
+                    : "⭐ {$uA} выдал(а) себе звезду (админку ВК)";
+            } else {
+                $msgText = $isRemove
+                    ? "⭐ {$uA} снял(а) звезду (админку ВК) с {$uTGen}"
+                    : "⭐ {$uA} выдал(а) звезду (админку ВК) {$uTDat}";
+            }
+            sendMessage($peerId, $msgText, $kb);
             sendToLogChat($pdo, "Беседа {$peerId}: {$uA} " . ($isRemove ? "снял звезду с" : "выдал звезду") . " " . formatUserMention($pdo, $peerId, $targetId) . ".");
             return true;
 

@@ -290,20 +290,108 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             return true;
 
         case 'online':
-            $res = vkApi('messages.getConversationMembers', ['peer_id' => $peerId, 'fields' => 'online,first_name,last_name']);
-            $profiles = $res['response']['profiles'] ?? [];
-            $onlineIds = [];
-            foreach ($profiles as $p) {
-                if (!empty($p['online'])) $onlineIds[] = (int)$p['id'];
-            }
-            if (empty($onlineIds)) {
-                sendMessage($peerId, "🌐 Сейчас нет участников онлайн (либо у бота нет прав админа беседы).");
+            if ($peerId <= 2000000000) {
+                sendMessage($peerId, "🌐 Команда /online работает только в групповых беседах.");
                 return true;
             }
-            $slice = array_slice($onlineIds, 0, 50);
-            preloadUsers($pdo, $peerId, $slice);
-            $onlineList = array_map(fn($uid) => "• " . formatUserMention($pdo, $peerId, $uid), $slice);
-            sendMessage($peerId, "🟢 Участники онлайн (" . count($onlineIds) . "):\n" . implode("\n", $onlineList), null, ['disable_mentions' => 1]);
+
+            // 1. Собираем ВСЕХ участников беседы (пагинация по 200 до 1000 человек)
+            $memberIds = [];
+            $vkNames = [];
+            $offset = 0;
+            $apiOk = false;
+
+            for ($page = 0; $page < 5; $page++) {
+                $res = vkApi('messages.getConversationMembers', [
+                    'peer_id' => $peerId,
+                    'count'   => 200,
+                    'offset'  => $offset,
+                    'fields'  => 'online,online_mobile,first_name,last_name',
+                ]);
+                if (!isset($res['response']['items'])) {
+                    break;
+                }
+                $apiOk = true;
+                $items = $res['response']['items'];
+                foreach ($items as $it) {
+                    $mid = (int)($it['member_id'] ?? 0);
+                    if ($mid > 0) $memberIds[$mid] = true;
+                }
+                foreach (($res['response']['profiles'] ?? []) as $pr) {
+                    $pid = (int)($pr['id'] ?? 0);
+                    if ($pid > 0) {
+                        $vkNames[$pid] = trim(($pr['first_name'] ?? '') . ' ' . ($pr['last_name'] ?? ''));
+                    }
+                }
+                if (count($items) < 200) {
+                    break;
+                }
+                $offset += 200;
+            }
+
+            // Резервный источник: если у бота нет прав админа в чате, берём известных участников из БД беседы
+            if (!$apiOk || empty($memberIds)) {
+                $stM = $pdo->prepare("SELECT vk_id FROM bot_chat_members WHERE peer_id = ? LIMIT 1000");
+                $stM->execute([$peerId]);
+                foreach ($stM->fetchAll(PDO::FETCH_COLUMN) as $mid) {
+                    $mid = (int)$mid;
+                    if ($mid > 0) $memberIds[$mid] = true;
+                }
+            }
+
+            $allIds = array_keys($memberIds);
+            if (empty($allIds)) {
+                sendMessage($peerId, "🌐 Не удалось получить список участников беседы. Выдайте боту права администратора.");
+                return true;
+            }
+
+            // 2. Проверяем актуальный статус online / online_mobile через users.get (батчами по 500 — точно и быстро)
+            $onlineUsers = [];
+            foreach (array_chunk($allIds, 500) as $chunk) {
+                $uRes = vkApi('users.get', [
+                    'user_ids' => implode(',', $chunk),
+                    'fields'   => 'online,online_mobile',
+                ]);
+                foreach (($uRes['response'] ?? []) as $u) {
+                    if (!empty($u['online'])) {
+                        $uid = (int)$u['id'];
+                        $onlineUsers[] = [
+                            'id'     => $uid,
+                            'name'   => trim(($u['first_name'] ?? '') . ' ' . ($u['last_name'] ?? '')) ?: ($vkNames[$uid] ?? "id{$uid}"),
+                            'mobile' => !empty($u['online_mobile']),
+                        ];
+                    }
+                }
+            }
+
+            $kb = makeInlineKeyboard([[
+                ['label' => '🔄 Обновить', 'payload' => ['cmd' => '!online'], 'color' => 'primary']
+            ]]);
+
+            if (empty($onlineUsers)) {
+                sendMessage($peerId, "🌐 Сейчас в сети никого нет (проверено участников: " . count($allIds) . ").", $kb);
+                return true;
+            }
+
+            // 3. Подгружаем никнеймы и роли из БД за 1 запрос
+            $nickMap = [];
+            $stN = $pdo->prepare("SELECT vk_id, nickname FROM bot_chat_members WHERE peer_id = ? AND nickname IS NOT NULL AND nickname != ''");
+            $stN->execute([$peerId]);
+            while ($nr = $stN->fetch()) {
+                $nickMap[(int)$nr['vk_id']] = (string)$nr['nickname'];
+            }
+
+            $lines = ["🟢 Участники в сети (" . count($onlineUsers) . " из " . count($allIds) . "):"];
+            $num = 1;
+            foreach ($onlineUsers as $ou) {
+                $uid = $ou['id'];
+                $disp = $nickMap[$uid] ?? $ou['name'];
+                $dev = $ou['mobile'] ? '📱' : '💻';
+                $lines[] = "{$num}. {$dev} [id{$uid}|{$disp}]";
+                $num++;
+            }
+
+            sendLongMessage($peerId, implode("\n", $lines), $kb, ['disable_mentions' => 1]);
             return true;
 
         case 'mention_on':
