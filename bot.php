@@ -401,13 +401,14 @@ if ($data['type'] === 'message_new') {
             }
         }
 
-        // 2.9. Кастомные триггеры / автоответчик (!триггер) из /tmp кэша
+        // 2.9. Продвинутые триггеры (ПСЖ, наказания, автоответчик) — triggers.php грузится лениво, только если есть триггеры
         if ($text !== '') {
             $triggers = getChatTriggers($pdo, $peerId);
             if (!empty($triggers)) {
-                $low = mb_strtolower($text);
-                if (isset($triggers[$low])) {
-                    sendMessage($peerId, $triggers[$low]);
+                require_once __DIR__ . '/triggers.php';
+                $matchedCfg = findMatchedTrigger($triggers, $text);
+                if ($matchedCfg !== null) {
+                    executeChatTrigger($pdo, $peerId, $fromId, $cmid, $text, $ctx, $matchedCfg);
                 }
             }
         }

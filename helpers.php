@@ -621,25 +621,6 @@ function vkSystemUnmute(int $peerId, int $vkId): array {
     return ['ok' => $ok, 'code' => $code];
 }
 
-/**
- * Выдача или снятие звезды (администратора беседы ВК) через messages.setMemberRole
- */
-function vkSetChatStar(int $peerId, int $vkId, bool $give = true): array {
-    if ($peerId <= 2000000000 || $vkId <= 0) {
-        return ['ok' => false, 'code' => 0, 'msg' => 'Команда работает только в беседах.'];
-    }
-    $res = vkApi('messages.setMemberRole', [
-        'peer_id'   => $peerId,
-        'member_id' => $vkId,
-        'role'      => $give ? 'admin' : 'member',
-    ]);
-    if (isset($res['response']) && (int)$res['response'] === 1) {
-        return ['ok' => true, 'code' => 0, 'msg' => ''];
-    }
-    $code = (int)($res['error']['error_code'] ?? 0);
-    $msg  = (string)($res['error']['error_msg'] ?? 'Не удалось изменить роль в беседе ВК.');
-    return ['ok' => false, 'code' => $code, 'msg' => $msg];
-}
 
 function canPunish(PDO $pdo, int $peerId, int $actorId, int $actorPriority, int $targetId, bool $isSuper, bool $allowSelf = false): ?string {
     if ($actorId === $targetId) {
@@ -703,8 +684,6 @@ function requestSuperApproval(PDO $pdo, int $peerId, int $actorId, int $targetId
         'removerole'  => 'Снятие ролей в беседе',
         'gremoverole' => 'Снятие ролей (объединение)',
         'zovvv'       => 'Глобальный вызов всех бесед (/zovvv)',
-        'star'        => 'Выдача звезды (админки ВК) в беседе (!звезда)',
-        'unstar'      => 'Снятие звезды (админки ВК) в беседе (!звезда)',
     ];
     $label = $actionLabels[$actionType] ?? strtoupper($actionType);
 
@@ -727,15 +706,6 @@ function requestSuperApproval(PDO $pdo, int $peerId, int $actorId, int $targetId
                 . "💬 Из беседы: {$chatTitle} (ID: {$peerId})\n"
                 . "📝 Текст вызова: {$reason}\n\n"
                 . "Разрешить отправку /zovvv во все беседы бота?";
-    } elseif ($actionType === 'star' || $actionType === 'unstar') {
-        $uTarget = formatUserMention($pdo, $peerId, $targetId);
-        $dmText = "⭐ [ЗАПРОС НА ЗВЕЗДУ В БЕСЕДЕ #{$reqId}]\n"
-                . "━━━━━━━━━━━━━━━━━━\n"
-                . "⚡ Действие: {$label}\n"
-                . "👮 Инициатор: {$uActor}\n"
-                . "🎯 Кому: {$uTarget}\n"
-                . "💬 Беседа: {$chatTitle} (ID: {$peerId})\n\n"
-                . "Разрешить выполнение этого действия?";
     } else {
         $uTarget = formatUserMention($pdo, $peerId, $targetId);
         $dmText = "🚨 [ЗАПРОС НА НАКАЗАНИЕ СУПЕР-ДОСТУПА #{$reqId}]\n"
@@ -756,9 +726,6 @@ function requestSuperApproval(PDO $pdo, int $peerId, int $actorId, int $targetId
     notifyMainOwners($dmText, $kb);
     if ($actionType === 'zovvv') {
         sendMessage($peerId, "🛡 Для выполнения глобального вызова /zovvv требуется одобрение Создателей бота.\n📩 Запрос #{$reqId} отправлен Создателям в ЛС. Ожидайте решения.");
-    } elseif ($actionType === 'star' || $actionType === 'unstar') {
-        $uTarget = formatUserMention($pdo, $peerId, $targetId);
-        sendMessage($peerId, "⭐ Для выполнения команды !звезда ({$uTarget}) требуется одобрение Создателей бота.\n📩 Запрос #{$reqId} отправлен Создателям в ЛС. Ожидайте решения.");
     } else {
         $uTarget = formatUserMention($pdo, $peerId, $targetId);
         sendMessage($peerId, "🛡 Пользователь {$uTarget} обладает супер-доступом.\n📩 Запрос #{$reqId} на разрешение действия («{$label}») отправлен Создателю бота в ЛС. Ожидайте решения.");
@@ -784,22 +751,6 @@ function executeApprovedSuperAction(PDO $pdo, array $req, int $approverId): stri
     $uOwner     = formatUserMention($pdo, $peerId, $approverId);
 
     switch ($act) {
-        case 'star':
-        case 'unstar':
-            $giveStar = ($act === 'star');
-            $stRes = vkSetChatStar($peerId, $targetId, $giveStar);
-            if ($stRes['ok']) {
-                $kb = makeInlineKeyboard([[
-                    ['label' => $giveStar ? '❌ Снять звезду' : '⭐ Выдать звезду', 'payload' => ['cmd' => $giveStar ? "!звезда {$targetId} снять" : "!звезда {$targetId}"], 'color' => $giveStar ? 'negative' : 'positive']
-                ]]);
-                $verb = $giveStar ? "выдал(а) звезду (админку ВК) {$uTargetDat}" : "снял(а) звезду (админку ВК) с {$uTargetGen}";
-                sendMessage($peerId, "⭐ {$uActor} {$verb} (одобрено Создателем {$uOwner})", $kb);
-                sendToLogChat($pdo, "Беседа {$peerId}: {$uActor} " . ($giveStar ? "выдал звезду" : "снял звезду") . " {$uTarget} (одобрил {$uOwner}).");
-                return ($giveStar ? "Звезда выдана " : "Звезда снята с ") . "{$uTarget} в беседе {$peerId}.";
-            }
-            sendMessage($peerId, "⚠️ Запрос #{$req['id']} одобрен, но ВК отклонил смену звезды (код {$stRes['code']}). Убедитесь, что бот — создатель/админ беседы.");
-            return "Ошибка ВК (код {$stRes['code']}): {$stRes['msg']}";
-
         case 'zovvv':
             $allPeers = $pdo->query("SELECT peer_id FROM bot_chats WHERE peer_id > 2000000000")->fetchAll(PDO::FETCH_COLUMN);
             $calls = [];
