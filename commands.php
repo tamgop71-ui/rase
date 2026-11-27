@@ -234,6 +234,18 @@ function getCommandAliasMap(): array {
         'цитата' => 'quote', 'цит' => 'quote', 'quote' => 'quote',
         'q' => 'leavechat', 'quit' => 'leavechat', 'выйти' => 'leavechat', 'выход' => 'leavechat', 'ливать' => 'leavechat', 'leave' => 'leavechat',
         'кто' => 'whorand', 'случайный' => 'whorand', 'whorand' => 'whorand',
+        'купитьраба' => 'slave_buy', 'купить' => 'slave_buy', 'buyраб' => 'slave_buy', 'buyslave' => 'slave_buy',
+        'цепи' => 'slave_chain', 'оковы' => 'slave_chain', 'заковать' => 'slave_chain', 'chain' => 'slave_chain',
+        'выкупиться' => 'slave_buyout', 'выкупить' => 'slave_buyout', 'выкуп' => 'slave_buyout', 'buyout' => 'slave_buyout',
+        'отпуститьраба' => 'slave_release', 'освободить' => 'slave_release', 'release' => 'slave_release',
+        'рабы' => 'slaves_list', 'раб' => 'slaves_list', 'моирабы' => 'slaves_list', 'slaves' => 'slaves_list',
+        'топхозяев' => 'slaves_top', 'топрабов' => 'slaves_top', 'slavetop' => 'slaves_top',
+        'крокодил' => 'crocodile', 'кроко' => 'crocodile', 'croco' => 'crocodile', 'crocodile' => 'crocodile',
+        'мафия' => 'mafia', 'mafia' => 'mafia',
+        'бизнес' => 'business', 'бизнесы' => 'business', 'business' => 'business', 'biz' => 'business',
+        'собрать' => 'biz_collect', 'прибыль' => 'biz_collect', 'касса' => 'biz_collect',
+        'колесо' => 'wheel', 'фортуна' => 'wheel', 'wheel' => 'wheel', 'спин' => 'wheel',
+        'сундук' => 'chest', 'дроп' => 'chest', 'клад' => 'chest', 'chest' => 'chest',
         'промокоды' => 'promolist', 'promolist' => 'promolist', 'промолист' => 'promolist',
         'sysfind' => 'sysfind', 'сиспоиск' => 'sysfind', 'глобпоиск' => 'sysfind', 'найтиюзера' => 'sysfind',
         'serv' => 'serv', 'сервер' => 'serv', 'server' => 'serv', 'crmp' => 'serv', 'онлайнсервера' => 'serv',
@@ -357,7 +369,7 @@ function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int
         'marry' => true, 'divorce' => true, 'marriages' => true, 'kiss' => true, 'hug' => true,
         'try' => true, 'iznas' => true, 'minet' => true, 'beer' => true, 'roll' => true,
         'ball' => true, 'choose' => true, 'rep' => true, 'case' => true, 'promo' => true,
-        'quests' => true, 'shop' => true, 'coin' => true, 'clan' => true, 'clans' => true, 'quiz' => true
+        'quests' => true, 'shop' => true, 'coin' => true, 'clan' => true, 'clans' => true, 'quiz' => true, 'slave_buy' => true, 'slave_chain' => true, 'slave_buyout' => true, 'slave_release' => true, 'slaves_list' => true, 'slaves_top' => true, 'crocodile' => true, 'mafia' => true, 'business' => true, 'biz_collect' => true, 'wheel' => true, 'chest' => true
     ];
     if (isset($gameCmds[$cmd]) && (int)($ctx['chat']['games_enabled'] ?? 1) === 0 && !$isSuper) {
         sendMessage($peerId, "🎮 Экономика и развлекательные команды отключены владельцем (!games).");
@@ -365,7 +377,7 @@ function executeCommand(PDO $pdo, string $rawCmd, string $args, int $peerId, int
     }
 
     // Ленивая подгрузка: загружаем ТОЛЬКО тот модуль (fun или mod), который нужен для этой команды
-    static $funSet = ['admins' => true, 'afk' => true, 'ai' => true, 'atop' => true, 'ball' => true, 'bank' => true, 'beer' => true, 'bonus' => true, 'case' => true, 'casino' => true, 'choose' => true, 'citizenship' => true, 'clan' => true, 'clans' => true, 'coin' => true, 'countries' => true, 'dem' => true, 'deposit' => true, 'divorce' => true, 'duel' => true, 'emoji' => true, 'enick' => true, 'giveaway' => true, 'help' => true, 'hug' => true, 'iznas' => true, 'kiss' => true, 'leavechat' => true, 'marriages' => true, 'marry' => true, 'mention_off' => true, 'mention_on' => true, 'mentions' => true, 'minet' => true, 'mycountry' => true, 'online' => true, 'passport' => true, 'pay' => true, 'ping' => true, 'poll' => true, 'profile' => true, 'promo' => true, 'quests' => true, 'quiz' => true, 'quote' => true, 'remind' => true, 'reminders' => true, 'rep' => true, 'rob' => true, 'roles' => true, 'roll' => true, 'roulette' => true, 'rules' => true, 'shop' => true, 'slots' => true, 'start' => true, 'stickers' => true, 'thereid' => true, 'top' => true, 'try' => true, 'whorand' => true, 'withdraw' => true, 'work' => true];
+    static $funSet = ['admins' => true, 'afk' => true, 'ai' => true, 'atop' => true, 'ball' => true, 'bank' => true, 'beer' => true, 'biz_collect' => true, 'bonus' => true, 'business' => true, 'case' => true, 'casino' => true, 'chest' => true, 'choose' => true, 'citizenship' => true, 'clan' => true, 'clans' => true, 'coin' => true, 'countries' => true, 'crocodile' => true, 'dem' => true, 'deposit' => true, 'divorce' => true, 'duel' => true, 'emoji' => true, 'enick' => true, 'giveaway' => true, 'help' => true, 'hug' => true, 'iznas' => true, 'kiss' => true, 'leavechat' => true, 'mafia' => true, 'marriages' => true, 'marry' => true, 'mention_off' => true, 'mention_on' => true, 'mentions' => true, 'minet' => true, 'mycountry' => true, 'online' => true, 'passport' => true, 'pay' => true, 'ping' => true, 'poll' => true, 'profile' => true, 'promo' => true, 'quests' => true, 'quiz' => true, 'quote' => true, 'remind' => true, 'reminders' => true, 'rep' => true, 'rob' => true, 'roles' => true, 'roll' => true, 'roulette' => true, 'rules' => true, 'shop' => true, 'slave_buy' => true, 'slave_buyout' => true, 'slave_chain' => true, 'slave_release' => true, 'slaves_list' => true, 'slaves_top' => true, 'slots' => true, 'start' => true, 'stickers' => true, 'thereid' => true, 'top' => true, 'try' => true, 'wheel' => true, 'whorand' => true, 'withdraw' => true, 'work' => true];
     if (isset($funSet[$cmd])) {
         require_once __DIR__ . '/commands_fun.php';
         if (handleFunAndGeneralCommands($pdo, $cmd, $args, $peerId, $fromId, $ctx, $msg, $myPriority, $isSuper)) {

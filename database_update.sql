@@ -448,3 +448,31 @@ INSERT IGNORE INTO `bot_settings` (`setting_key`, `setting_value`) VALUES
 ('report_notify_peer_id', '0'),
 ('report_notify_enabled', '1'),
 ('maintenance_mode', '0');
+
+-- 22. Приоритет администратора, выдавшего наказание (для иерархии снятия варнов)
+-- (Также применяется автоматически при старте бота через ensureBotSchemaV6)
+-- ALTER TABLE `bot_punishments` ADD COLUMN `actor_priority` INT UNSIGNED DEFAULT NULL AFTER `actor_vk_id`;
+
+-- 23. Система рабов (!купитьраба, !цепи, !выкупиться, !рабы)
+CREATE TABLE IF NOT EXISTS `bot_slaves` (
+    `slave_vk_id` BIGINT UNSIGNED NOT NULL,
+    `owner_vk_id` BIGINT UNSIGNED NOT NULL,
+    `price` BIGINT UNSIGNED NOT NULL DEFAULT 5000,
+    `purchases_count` INT UNSIGNED NOT NULL DEFAULT 1,
+    `chained_until` DATETIME DEFAULT NULL,
+    `last_collect_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `bought_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`slave_vk_id`),
+    KEY `idx_owner` (`owner_vk_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 24. Бизнесы с пассивным доходом (!бизнес, !собрать)
+CREATE TABLE IF NOT EXISTS `bot_businesses` (
+    `vk_id` BIGINT UNSIGNED NOT NULL,
+    `biz_type` TINYINT UNSIGNED NOT NULL,
+    `level` TINYINT UNSIGNED NOT NULL DEFAULT 1,
+    `last_collect_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `bought_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`vk_id`),
+    KEY `idx_biz_type` (`biz_type`, `level`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

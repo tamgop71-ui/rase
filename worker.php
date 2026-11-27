@@ -26,6 +26,13 @@ while (true) {
 
     try {
         $pdo = getDB();
+        ensureBotSchemaV6($pdo);
+
+        // 0. Таймеры фаз активных игр «Мафия» (0 SQL и 0 require, если игр нет)
+        if (glob('/tmp/mafia_2*.json')) {
+            require_once __DIR__ . '/games_party.php';
+            processMafiaTimeouts($pdo);
+        }
 
         // 1. Отправка сработавших напоминаний (!напомни)
         $reminders = $pdo->query("SELECT * FROM bot_reminders WHERE is_sent = 0 AND remind_at <= NOW() ORDER BY remind_at ASC LIMIT 20")->fetchAll();

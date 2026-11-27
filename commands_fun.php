@@ -532,7 +532,8 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             $pdo->prepare("UPDATE bot_users SET balance = ?, reputation = reputation + ?, daily_games = daily_games + 1 WHERE vk_id = ?")
                 ->execute([$newBal, $repBonus, $fromId]);
             $repStr = $repBonus > 0 ? " + {$repBonus} ⭐ репутации" : "";
-            sendMessage($peerId, "🎁 Вы открыли «{$c['name']}»!\n🎉 Выпало: " . formatMoney($prize) . "{$repStr}\n💰 Ваш баланс: " . formatMoney($newBal));
+            $kb = makeInlineKeyboard([[['label' => '🔄 Открыть ещё', 'payload' => ['cmd' => "!кейс {$type}"], 'color' => 'primary'], ['label' => '🎁 Все кейсы', 'payload' => ['cmd' => '!кейс'], 'color' => 'secondary']]]);
+            sendMessage($peerId, "🎁 Вы открыли «{$c['name']}»!\n🎉 Выпало: " . formatMoney($prize) . "{$repStr}\n💰 Ваш баланс: " . formatMoney($newBal), $kb);
             return true;
 
         case 'promo':
@@ -563,15 +564,33 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
 
         case 'bonus':
             $lastBonus = $ctx['global']['last_bonus'] ?? null;
-            if ($lastBonus !== null && (time() - strtotime($lastBonus)) < 86400) {
-                $rem = 86400 - (time() - strtotime($lastBonus));
+            $now = time();
+            if ($lastBonus !== null && ($now - strtotime($lastBonus)) < 86400) {
+                $rem = 86400 - ($now - strtotime($lastBonus));
                 $h = (int)floor($rem / 3600); $min = (int)floor(($rem % 3600) / 60);
-                sendMessage($peerId, "⏳ Вы уже забирали бонус. Следующий через {$h} ч. {$min} мин.");
+                $kb = makeInlineKeyboard([[['label' => '🎡 Колесо фортуны', 'payload' => ['cmd' => '!колесо'], 'color' => 'primary']]]);
+                sendMessage($peerId, "⏳ Вы уже забирали бонус. Следующий через {$h} ч. {$min} мин.", $kb);
                 return true;
             }
-            $reward = ((int)$ctx['global']['is_vip'] === 1) ? 2500 : 1000;
+            $streakFile = "/tmp/bstreak_{$fromId}.json";
+            $streak = 1;
+            if (is_file($streakFile)) {
+                $stData = json_decode((string)@file_get_contents($streakFile), true);
+                if (is_array($stData) && ($now - (int)($stData['ts'] ?? 0)) <= 172800) {
+                    $streak = min(7, (int)($stData['s'] ?? 0) + 1);
+                }
+            }
+            @file_put_contents($streakFile, json_encode(['s' => $streak, 'ts' => $now]));
+
+            $base = ((int)$ctx['global']['is_vip'] === 1) ? 2500 : 1000;
+            $mult = 1.0 + ($streak - 1) * 0.25; // до x2.5 на 7-й день подряд
+            $reward = (int)round($base * $mult);
             $pdo->prepare("UPDATE bot_users SET balance = balance + ?, last_bonus = NOW() WHERE vk_id = ?")->execute([$reward, $fromId]);
-            sendMessage($peerId, "🎁 Вы получили ежедневный бонус: " . formatMoney($reward) . "!");
+            $kb = makeInlineKeyboard([[
+                ['label' => '🎡 Колесо фортуны', 'payload' => ['cmd' => '!колесо'], 'color' => 'positive'],
+                ['label' => '🏢 Бизнес', 'payload' => ['cmd' => '!бизнес'], 'color' => 'secondary']
+            ]]);
+            sendMessage($peerId, "🎁 Ежедневный бонус получен: +" . formatMoney($reward) . "!\n🔥 Серия дней подряд: {$streak}/7 (множитель x{$mult})", $kb);
             return true;
 
         case 'work':
@@ -663,10 +682,21 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             $diff = $win - $bet;
             $newBal = $bal + $diff;
             $pdo->prepare("UPDATE bot_users SET balance = ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$newBal, $fromId]);
+
+            $kbRow = [['label' => "🔄 Повторить (" . formatMoney($bet) . ")", 'payload' => ['cmd' => "!казино {$bet}"], 'color' => 'primary']];
+            if ($newBal >= $bet * 2) {
+                $bet2 = $bet * 2;
+                $kbRow[] = ['label' => "⚡ x2 (" . formatMoney($bet2) . ")", 'payload' => ['cmd' => "!казино {$bet2}"], 'color' => 'positive'];
+            }
+            if ($newBal > 0) {
+                $kbRow[] = ['label' => '🔥 Ва-банк', 'payload' => ['cmd' => '!казино все'], 'color' => 'negative'];
+            }
+            $kb = makeInlineKeyboard([$kbRow]);
+
             if ($mult >= 1.0) {
-                sendMessage($peerId, "🎰 Множитель {$mult}×!\n✅ Выигрыш: " . formatMoney($win) . " (чистыми +" . formatMoney($diff) . ")\n💰 Баланс: " . formatMoney($newBal));
+                sendMessage($peerId, "🎰 Множитель {$mult}×!\n✅ Выигрыш: " . formatMoney($win) . " (чистыми +" . formatMoney($diff) . ")\n💰 Баланс: " . formatMoney($newBal), $kb);
             } else {
-                sendMessage($peerId, "🎰 Множитель {$mult}×.\n❌ Проигрыш: " . formatMoney(abs($diff)) . "\n💰 Баланс: " . formatMoney($newBal));
+                sendMessage($peerId, "🎰 Множитель {$mult}×.\n❌ Проигрыш: " . formatMoney(abs($diff)) . "\n💰 Баланс: " . formatMoney($newBal), $kb);
             }
             return true;
 
@@ -679,17 +709,21 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             if ($r1 === $r2 && $r2 === $r3) {
                 $mult = ($r1 === '7️⃣') ? 10 : (($r1 === '💎') ? 5 : 3);
                 $win = $bet * $mult; $newBal = $bal + $win - $bet;
-                $pdo->prepare("UPDATE bot_users SET balance = ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$newBal, $fromId]);
-                sendMessage($peerId, "🎰 [ {$r1} | {$r2} | {$r3} ]\n🔥 ДЖЕКПОТ x{$mult}! Выигрыш: " . formatMoney($win) . "\n💰 Баланс: " . formatMoney($newBal));
+                $txt = "🎰 [ {$r1} | {$r2} | {$r3} ]\n🔥 ДЖЕКПОТ x{$mult}! Выигрыш: " . formatMoney($win) . "\n💰 Баланс: " . formatMoney($newBal);
             } elseif ($r1 === $r2 || $r2 === $r3 || $r1 === $r3) {
                 $win = (int)round($bet * 1.3); $newBal = $bal + $win - $bet;
-                $pdo->prepare("UPDATE bot_users SET balance = ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$newBal, $fromId]);
-                sendMessage($peerId, "🎰 [ {$r1} | {$r2} | {$r3} ]\n✅ Пара (x1.3)! Выигрыш: " . formatMoney($win) . "\n💰 Баланс: " . formatMoney($newBal));
+                $txt = "🎰 [ {$r1} | {$r2} | {$r3} ]\n✅ Пара (x1.3)! Выигрыш: " . formatMoney($win) . "\n💰 Баланс: " . formatMoney($newBal);
             } else {
                 $newBal = $bal - $bet;
-                $pdo->prepare("UPDATE bot_users SET balance = ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$newBal, $fromId]);
-                sendMessage($peerId, "🎰 [ {$r1} | {$r2} | {$r3} ]\n❌ Проигрыш: " . formatMoney($bet) . "\n💰 Баланс: " . formatMoney($newBal));
+                $txt = "🎰 [ {$r1} | {$r2} | {$r3} ]\n❌ Проигрыш: " . formatMoney($bet) . "\n💰 Баланс: " . formatMoney($newBal);
             }
+            $pdo->prepare("UPDATE bot_users SET balance = ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$newBal, $fromId]);
+            $kbRow = [['label' => "🔄 Повторить (" . formatMoney($bet) . ")", 'payload' => ['cmd' => "!слоты {$bet}"], 'color' => 'primary']];
+            if ($newBal >= $bet * 2) {
+                $bet2 = $bet * 2;
+                $kbRow[] = ['label' => "⚡ x2 (" . formatMoney($bet2) . ")", 'payload' => ['cmd' => "!слоты {$bet2}"], 'color' => 'positive'];
+            }
+            sendMessage($peerId, $txt, makeInlineKeyboard([$kbRow]));
             return true;
 
         case 'roulette':
@@ -708,13 +742,22 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             if ($choice === $resColor) {
                 $mult = ($resColor === 'green') ? 14 : 2;
                 $win = $bet * $mult; $newBal = $bal + $win - $bet;
-                $pdo->prepare("UPDATE bot_users SET balance = ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$newBal, $fromId]);
-                sendMessage($peerId, "🎡 Выпало: {$cEmoji}\n✅ Победа (x{$mult})! Выигрыш: " . formatMoney($win) . "\n💰 Баланс: " . formatMoney($newBal));
+                $txt = "🎡 Выпало: {$cEmoji}\n✅ Победа (x{$mult})! Выигрыш: " . formatMoney($win) . "\n💰 Баланс: " . formatMoney($newBal);
             } else {
                 $newBal = $bal - $bet;
-                $pdo->prepare("UPDATE bot_users SET balance = ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$newBal, $fromId]);
-                sendMessage($peerId, "🎡 Выпало: {$cEmoji}\n❌ Проигрыш: " . formatMoney($bet) . "\n💰 Баланс: " . formatMoney($newBal));
+                $txt = "🎡 Выпало: {$cEmoji}\n❌ Проигрыш: " . formatMoney($bet) . "\n💰 Баланс: " . formatMoney($newBal);
             }
+            $pdo->prepare("UPDATE bot_users SET balance = ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$newBal, $fromId]);
+            $choiceRu = ($choice === 'black') ? 'черное' : (($choice === 'green') ? 'зеленое' : 'красное');
+            $altRu = ($choice === 'red') ? 'черное' : 'красное';
+            $altIcon = ($choice === 'red') ? '⚫' : '🔴';
+            $kbRow = [['label' => "🔄 Повторить", 'payload' => ['cmd' => "!рулетка {$choiceRu} {$bet}"], 'color' => 'primary']];
+            if ($newBal >= $bet * 2) {
+                $bet2 = $bet * 2;
+                $kbRow[] = ['label' => "⚡ x2 Ставка", 'payload' => ['cmd' => "!рулетка {$choiceRu} {$bet2}"], 'color' => 'positive'];
+            }
+            $kbRow[] = ['label' => "{$altIcon} На {$altRu}", 'payload' => ['cmd' => "!рулетка {$altRu} {$bet}"], 'color' => 'secondary'];
+            sendMessage($peerId, $txt, makeInlineKeyboard([$kbRow]));
             return true;
 
         case 'pay':
@@ -1062,13 +1105,19 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             $dropRu = ($drop === 'heads') ? '🦅 Орёл' : '🪙 Решка';
             if ($pick === $drop) {
                 $newBal = $bal + $bet;
-                $pdo->prepare("UPDATE bot_users SET balance = ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$newBal, $fromId]);
-                sendMessage($peerId, "🪙 Выпало: {$dropRu}!\n✅ Победа (x2)! Выигрыш: +" . formatMoney($bet) . "\n💰 Баланс: " . formatMoney($newBal));
+                $txt = "🪙 Выпало: {$dropRu}!\n✅ Победа (x2)! Выигрыш: +" . formatMoney($bet) . "\n💰 Баланс: " . formatMoney($newBal);
             } else {
                 $newBal = $bal - $bet;
-                $pdo->prepare("UPDATE bot_users SET balance = ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$newBal, $fromId]);
-                sendMessage($peerId, "🪙 Выпало: {$dropRu}.\n❌ Проигрыш: " . formatMoney($bet) . "\n💰 Баланс: " . formatMoney($newBal));
+                $txt = "🪙 Выпало: {$dropRu}.\n❌ Проигрыш: " . formatMoney($bet) . "\n💰 Баланс: " . formatMoney($newBal);
             }
+            $pdo->prepare("UPDATE bot_users SET balance = ?, daily_games = daily_games + 1 WHERE vk_id = ?")->execute([$newBal, $fromId]);
+            $pickRu = ($pick === 'heads') ? 'орёл' : 'решка';
+            $kbRow = [['label' => "🔄 Повторить", 'payload' => ['cmd' => "!монетка {$pickRu} {$bet}"], 'color' => 'primary']];
+            if ($newBal >= $bet * 2) {
+                $bet2 = $bet * 2;
+                $kbRow[] = ['label' => "⚡ x2 Ставка", 'payload' => ['cmd' => "!монетка {$pickRu} {$bet2}"], 'color' => 'positive'];
+            }
+            sendMessage($peerId, $txt, makeInlineKeyboard([$kbRow]));
             return true;
 
         case 'clan':
@@ -1283,8 +1332,15 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             } elseif (!empty($msg['fwd_messages'][0])) {
                 $fMsg = $msg['fwd_messages'][0];
                 if ((int)($fMsg['from_id'] ?? 0) > 0) $authorId = (int)$fMsg['from_id'];
-                if ($quoteText === '') $quoteText = trim((string)($fMsg['text'] ?? ''));
                 if (!empty($fMsg['date'])) $quoteTs = (int)$fMsg['date'];
+                if ($quoteText === '') {
+                    $chunks = [];
+                    foreach (array_slice($msg['fwd_messages'], 0, 3) as $fw) {
+                        $t = trim((string)($fw['text'] ?? ''));
+                        if ($t !== '') $chunks[] = $t;
+                    }
+                    $quoteText = implode("\n", $chunks);
+                }
             }
 
             if ($quoteText === '') {
@@ -1322,22 +1378,17 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             $avatarUrl  = $uProf['avatar'] !== '' ? $uProf['avatar'] : null;
 
             require_once __DIR__ . '/quote_generator.php';
-            $imgPath = generateQuoteImage($quoteText, $authorName, $avatarUrl, $quoteTs);
-            if ($imgPath === null) {
-                sendMessage($peerId, "⚠️ Не удалось сгенерировать картинку цитаты. Убедитесь, что контейнер пересобран с новым Dockerfile.");
-                return true;
+            $imgPath = generateQuoteImage($quoteText, $authorName, $avatarUrl, $quoteTs, $authorId);
+            if ($imgPath !== null) {
+                $upRes = uploadPhotoToVkMessage($peerId, $imgPath);
+                @unlink($imgPath);
+                if (!empty($upRes['attachment'])) {
+                    sendMessage($peerId, "", null, ['attachment' => $upRes['attachment']]);
+                    return true;
+                }
             }
-
-            $upRes = uploadPhotoToVkMessage($peerId, $imgPath);
-            @unlink($imgPath);
-
-            if (empty($upRes['attachment'])) {
-                $errDetail = !empty($upRes['error']) ? ("\nПричина: " . $upRes['error']) : "";
-                sendMessage($peerId, "⚠️ Не удалось загрузить картинку в ВКонтакте.{$errDetail}");
-                return true;
-            }
-
-            sendMessage($peerId, "", null, ['attachment' => $upRes['attachment']]);
+            // Безотказный резервный вывод, если ВК временно отклонил загрузку фото
+            sendMessage($peerId, "💬 «{$quoteText}»\n\n— © {$authorName}, " . date('d.m.Y H:i', $quoteTs) . " МСК");
             return true;
 
 
@@ -1425,8 +1476,19 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             @unlink($imgPath);
 
             if (empty($upRes['attachment'])) {
-                $errDetail = !empty($upRes['error']) ? ("\nПричина: " . $upRes['error']) : "";
-                sendMessage($peerId, "⚠️ Не удалось загрузить паспорт в ВКонтакте.{$errDetail}");
+                sendMessage(
+                    $peerId,
+                    "🪪 Паспорт гражданина RASE RUSSIA\n"
+                    . "━━━━━━━━━━━━━━━━━━\n"
+                    . "👤 Имя: {$dispName} (ID: {$targetId})\n"
+                    . "🛡 Роль: {$rName}\n"
+                    . "💰 Наличные: " . formatMoney((int)$g['balance']) . " | 🏦 Банк: " . formatMoney((int)$g['bank_balance']) . "\n"
+                    . "🏰 Клан: {$clanName} | 🌍 Страна: {$countryName}\n"
+                    . "💍 Брак: {$marriageStr}\n"
+                    . "✉️ Сообщений: {$m['messages_count']} (всего: {$g['total_messages']})",
+                    null,
+                    ['disable_mentions' => 1]
+                );
                 return true;
             }
 
@@ -1670,6 +1732,68 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             } else {
                 sendMessage($peerId, "🎲 Случайный участник беседы: {$uPicked}!", null, ['disable_mentions' => 1]);
             }
+            return true;
+
+
+        case 'slave_buy':
+            require_once __DIR__ . '/slaves.php';
+            handleSlaveBuy($pdo, $peerId, $fromId, $args, $msg, $ctx);
+            return true;
+
+        case 'slave_chain':
+            require_once __DIR__ . '/slaves.php';
+            handleSlaveChain($pdo, $peerId, $fromId, $args, $msg, $ctx);
+            return true;
+
+        case 'slave_buyout':
+            require_once __DIR__ . '/slaves.php';
+            handleSlaveBuyout($pdo, $peerId, $fromId, $args, $msg, $ctx);
+            return true;
+
+        case 'slave_release':
+            require_once __DIR__ . '/slaves.php';
+            handleSlaveRelease($pdo, $peerId, $fromId, $args, $msg);
+            return true;
+
+        case 'slaves_list':
+            require_once __DIR__ . '/slaves.php';
+            handleSlavesList($pdo, $peerId, $fromId, $args, $msg, $ctx);
+            return true;
+
+        case 'slaves_top':
+            require_once __DIR__ . '/slaves.php';
+            handleSlavesTop($pdo, $peerId);
+            return true;
+
+        case 'crocodile':
+            require_once __DIR__ . '/games_party.php';
+            handleCrocodileCommand($pdo, $peerId, $fromId, $args, $myPriority, $isSuper);
+            return true;
+
+        case 'mafia':
+            require_once __DIR__ . '/games_party.php';
+            handleMafiaCommand($pdo, $peerId, $fromId, $args, $myPriority, $isSuper, $ctx);
+            return true;
+
+
+        case 'business':
+            require_once __DIR__ . '/businesses.php';
+            handleBusinessCommand($pdo, $peerId, $fromId, $args, $ctx);
+            return true;
+
+        case 'biz_collect':
+            require_once __DIR__ . '/businesses.php';
+            handleBusinessCollect($pdo, $peerId, $fromId);
+            return true;
+
+        case 'wheel':
+            require_once __DIR__ . '/businesses.php';
+            handleFortuneWheel($pdo, $peerId, $fromId, $ctx);
+            return true;
+
+        case 'chest':
+            require_once __DIR__ . '/businesses.php';
+            handleChatChest($pdo, $peerId, $fromId, $args, $myPriority, $isSuper, $ctx);
             return true;
 
     }

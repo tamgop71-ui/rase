@@ -401,6 +401,15 @@ if ($data['type'] === 'message_new') {
             }
         }
 
+        // 2.8.5. Проверка угадывания слова в игре «Крокодил» (0 SQL и 0 подключений, пока нет активной игры!)
+        if ($peerId > 2000000000 && $text !== '' && is_file("/tmp/croco_{$peerId}.json")) {
+            require_once __DIR__ . '/games_party.php';
+            if (checkCrocodileGuess($pdo, $peerId, $fromId, $text)) {
+                flushPendingStats($pdo, $ctx);
+                exit('ok');
+            }
+        }
+
         // 2.9. Продвинутые триггеры (ПСЖ, наказания, автоответчик) — triggers.php грузится лениво, только если есть триггеры
         if ($text !== '') {
             $triggers = getChatTriggers($pdo, $peerId);

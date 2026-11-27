@@ -237,11 +237,17 @@ function executeChatTrigger(PDO $pdo, int $peerId, int $fromId, int $cmid, strin
                 resetMemberOnLeave($pdo, $tp, $fromId);
             }
         }
+        $failedKickChats = [];
         if (!empty($calls)) {
             $resMulti = vkApiMulti($calls, 10);
-            foreach ($resMulti as $res) {
+            foreach ($resMulti as $tpKey => $res) {
                 if (isset($res['response']) && (int)$res['response'] === 1) {
                     $actedCount++;
+                } else {
+                    $eCode = (int)($res['error']['error_code'] ?? 0);
+                    $shortId = ((int)$tpKey > 2000000000) ? ((int)$tpKey - 2000000000) : (int)$tpKey;
+                    $why = in_array($eCode, [15, 925], true) ? 'админ ВК / звезда' : "код {$eCode}";
+                    $failedKickChats[] = "#{$shortId} ({$why})";
                 }
             }
         }
@@ -328,6 +334,9 @@ function executeChatTrigger(PDO $pdo, int $peerId, int $fromId, int $cmid, strin
                         . "📝 Причина: {$reason}";
         } else {
             $notifyBody = renderTriggerVars($notifyBody, $vars);
+        }
+        if (!empty($failedKickChats)) {
+            $notifyBody .= "\n⚠️ Не удалось кикнуть из: " . implode(', ', $failedKickChats);
         }
         // Кнопку отката в чужой чат вешаем только если это глобальное снятие (sysunmute) или тот же чат
         $kb2 = ($notifyPeer === $peerId) ? $rollbackKb : null;

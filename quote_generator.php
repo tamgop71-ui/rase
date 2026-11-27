@@ -13,25 +13,51 @@ function quoteFindFont(array $candidates): ?string {
     return null;
 }
 
-function quoteDownloadBinary(string $url): ?string {
+function quoteSanitizeText(string $text): string {
+    // Убираем невидимые символы (ZWSP, variation selectors), которые ломают FreeType
+    $text = (string)preg_replace('/[\x{200B}-\x{200D}\x{FE0E}\x{FE0F}\x{2060}\x{FEFF}]/u', '', $text);
+    // Убираем 4-байтовые эмодзи, которые не поддерживает DejaVuSans (иначе рисуются квадраты)
+    $text = (string)preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', $text);
+    return trim($text);
+}
+
+function quoteDownloadBinary(string $url, int $cacheVkId = 0): ?string {
     if ($url === '') return null;
-    $ch = curl_init($url);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER    => true,
-        CURLOPT_FOLLOWLOCATION    => true,
-        CURLOPT_CONNECTTIMEOUT    => 3,
-        CURLOPT_TIMEOUT           => 5,
-        CURLOPT_NOSIGNAL          => 1,
-        CURLOPT_IPRESOLVE         => CURL_IPRESOLVE_V4,
-        CURLOPT_USERAGENT         => 'RaseRussiaBot',
-    ]);
-    $data = curl_exec($ch);
-    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-    if ($data === false || $code < 200 || $code >= 300 || strlen((string)$data) < 100) {
-        return null;
+    $cacheFile = $cacheVkId > 0 ? "/tmp/ava_{$cacheVkId}.bin" : null;
+    if ($cacheFile !== null && is_file($cacheFile) && (time() - (int)@filemtime($cacheFile)) < 1800) {
+        $cached = @file_get_contents($cacheFile);
+        if (is_string($cached) && strlen($cached) >= 100) {
+            return $cached;
+        }
     }
-    return (string)$data;
+
+    for ($attempt = 1; $attempt <= 2; $attempt++) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER    => true,
+            CURLOPT_FOLLOWLOCATION    => true,
+            CURLOPT_MAXREDIRS         => 5,
+            CURLOPT_CONNECTTIMEOUT    => 3,
+            CURLOPT_TIMEOUT           => 6,
+            CURLOPT_NOSIGNAL          => 1,
+            CURLOPT_IPRESOLVE         => CURL_IPRESOLVE_V4,
+            CURLOPT_SSL_VERIFYPEER    => false,
+            CURLOPT_SSL_VERIFYHOST    => 0,
+            CURLOPT_USERAGENT         => 'Mozilla/5.0 RaseRussiaBot',
+        ]);
+        $data = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($data !== false && $code >= 200 && $code < 300 && strlen((string)$data) >= 100) {
+            if ($cacheFile !== null) {
+                $tmp = $cacheFile . '.' . getmypid() . '.tmp';
+                if (@file_put_contents($tmp, $data) !== false) @rename($tmp, $cacheFile);
+            }
+            return (string)$data;
+        }
+        if ($attempt === 1) usleep(150000);
+    }
+    return null;
 }
 
 function quoteFormatRuDate(int $ts): string {
@@ -181,7 +207,9 @@ function quoteDrawCircularAvatar($canvas, ?string $avatarBytes, int $dstX, int $
 /**
  * Генерирует JPEG-файл цитаты и возвращает путь к нему (или null при ошибке)
  */
-function generateQuoteImage(string $quoteText, string $authorName, ?string $avatarUrl, int $timestamp): ?string {
+function generateQuoteImage(string $quoteText, string $authorName, ?string $avatarUrl, int $timestamp, int $authorVkId = 0): ?string {
+    $quoteText  = quoteSanitizeText($quoteText) ?: $quoteText;
+    $authorName = quoteSanitizeText($authorName) ?: 'Игрок';
     if (!extension_loaded('gd') || !function_exists('imagettftext')) {
         file_put_contents('php://stderr', "[QUOTE ERROR] PHP GD + FreeType not available." . PHP_EOL);
         return null;
@@ -237,7 +265,7 @@ function generateQuoteImage(string $quoteText, string $authorName, ?string $avat
     }
 
     // 3. Круглая аватарка слева
-    $avatarBytes = ($avatarUrl !== null && $avatarUrl !== '') ? quoteDownloadBinary($avatarUrl) : null;
+    $avatarBytes = ($avatarUrl !== null && $avatarUrl !== '') ? quoteDownloadBinary($avatarUrl, $authorVkId) : null;
     $avatarSize = 360;
     $avatarX = 56;
     $avatarY = 165;
@@ -327,357 +355,90 @@ function generateQuoteImage(string $quoteText, string $authorName, ?string $avat
  * Загрузка готовой картинки в VK и получение ['attachment' => 'photo...', 'error' => null|string]
  */
 function uploadPhotoToVkMessage(int $peerId, string $filePath): array {
-    // Для ботов в беседах VK API рекомендует peer_id = 0; при ошибке пробуем с реальным peer_id
-    $srv = vkApi('photos.getMessagesUploadServer', ['peer_id' => 0]);
-    if (empty($srv['response']['upload_url']) && $peerId > 0) {
-        $srv = vkApi('photos.getMessagesUploadServer', ['peer_id' => $peerId]);
+    if (!is_file($filePath) || (int)@filesize($filePath) < 100) {
+        return ['attachment' => null, 'error' => 'Сгенерированный файл изображения пуст.'];
     }
 
-    $uploadUrl = (string)($srv['response']['upload_url'] ?? '');
-    if ($uploadUrl === '') {
-        $code = (int)($srv['error']['error_code'] ?? 0);
-        $msg  = (string)($srv['error']['error_msg'] ?? 'empty upload_url');
-        file_put_contents('php://stderr', "[QUOTE UPLOAD] getMessagesUploadServer failed ({$code}): {$msg}" . PHP_EOL);
-        if ($code === 15 || $code === 27 || $code === 5) {
-            return [
-                'attachment' => null,
-                'error' => "У токена сообщества ВК нет права «Фотографии» (код {$code}). Пересоздайте ключ доступа в управлении группой ВК с галочками «Сообщения» + «Фотографии» и обновите VK_GROUP_TOKEN на BotHost."
-            ];
+    $lastError = 'Неизвестная ошибка загрузки.';
+    for ($attempt = 1; $attempt <= 3; $attempt++) {
+        // 1. Получаем upload_url (чередуем peer_id = 0 и реальный $peerId)
+        $tryPeer = ($attempt === 2 && $peerId > 0) ? $peerId : 0;
+        $srv = vkApi('photos.getMessagesUploadServer', ['peer_id' => $tryPeer]);
+        if (empty($srv['response']['upload_url']) && $tryPeer === 0 && $peerId > 0) {
+            $srv = vkApi('photos.getMessagesUploadServer', ['peer_id' => $peerId]);
         }
-        return ['attachment' => null, 'error' => "VK getMessagesUploadServer (код {$code}): {$msg}"];
-    }
 
-    $ch = curl_init($uploadUrl);
-    curl_setopt_array($ch, [
-        CURLOPT_POST              => true,
-        CURLOPT_POSTFIELDS        => ['photo' => new CURLFile($filePath, 'image/jpeg', 'quote.jpg')],
-        CURLOPT_HTTPHEADER        => ['Expect:'],
-        CURLOPT_RETURNTRANSFER    => true,
-        CURLOPT_FOLLOWLOCATION    => true,
-        CURLOPT_CONNECTTIMEOUT    => 4,
-        CURLOPT_TIMEOUT           => 12,
-        CURLOPT_NOSIGNAL          => 1,
-        CURLOPT_IPRESOLVE         => CURL_IPRESOLVE_V4,
-        CURLOPT_USERAGENT         => 'RaseRussiaBot',
-    ]);
-    $raw = curl_exec($ch);
-    $curlErr = curl_error($ch);
-    curl_close($ch);
-
-    if ($raw === false || $raw === '') {
-        file_put_contents('php://stderr', "[QUOTE UPLOAD] HTTP upload failed: {$curlErr}" . PHP_EOL);
-        return ['attachment' => null, 'error' => "Ошибка отправки файла на сервер ВК: {$curlErr}"];
-    }
-
-    $up = json_decode((string)$raw, true);
-    if (!is_array($up) || empty($up['photo']) || $up['photo'] === '[]' || empty($up['hash']) || !isset($up['server'])) {
-        file_put_contents('php://stderr', "[QUOTE UPLOAD] Invalid upload response: " . mb_substr((string)$raw, 0, 300) . PHP_EOL);
-        return ['attachment' => null, 'error' => "Сервер ВК отклонил файл изображения."];
-    }
-
-    $saved = vkApi('photos.saveMessagesPhoto', [
-        'photo'  => $up['photo'],
-        'server' => $up['server'],
-        'hash'   => $up['hash'],
-    ]);
-
-    $p = $saved['response'][0] ?? null;
-    if (empty($p['owner_id']) || empty($p['id'])) {
-        $code = (int)($saved['error']['error_code'] ?? 0);
-        $msg  = (string)($saved['error']['error_msg'] ?? 'save failed');
-        file_put_contents('php://stderr', "[QUOTE UPLOAD] saveMessagesPhoto failed ({$code}): {$msg}" . PHP_EOL);
-        return ['attachment' => null, 'error' => "VK saveMessagesPhoto (код {$code}): {$msg}"];
-    }
-
-    $att = "photo{$p['owner_id']}_{$p['id']}";
-    if (!empty($p['access_key'])) {
-        $att .= '_' . $p['access_key'];
-    }
-    return ['attachment' => $att, 'error' => null];
-}
-
-/**
- * Генератор классического мема-демотиватора (!дем [верх] | [низ]) на PHP GD
- */
-function generateDemotivatorImage(string $photoUrl, string $topText, string $bottomText = ''): ?string {
-    if (!extension_loaded('gd') || !function_exists('imagettftext')) {
-        return null;
-    }
-
-    $fontSerif = quoteFindFont([
-        '/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf',
-        '/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf',
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-    ]);
-    $fontSans = quoteFindFont([
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-    ]) ?? $fontSerif;
-
-    if ($fontSerif === null) return null;
-
-    $bytes = quoteDownloadBinary($photoUrl);
-    if ($bytes === null) return null;
-    $src = @imagecreatefromstring($bytes);
-    if ($src === false) return null;
-
-    $sw = imagesx($src);
-    $sh = imagesy($src);
-
-    // Масштабируем исходное фото под рамку 840px по ширине
-    $boxW = 840;
-    $boxH = (int)round($sh * ($boxW / max(1, $sw)));
-    $boxH = max(320, min(840, $boxH));
-
-    $padX = 80;
-    $padTop = 65;
-    $canvasW = $boxW + ($padX * 2);
-
-    $cleanTop = trim(preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', $topText));
-    $cleanBot = trim(preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', $bottomText));
-    if ($cleanTop === '') $cleanTop = ' ';
-
-    $topSize = 44.0;
-    $topLines = quoteWrapText($cleanTop, $fontSerif, $topSize, $canvasW - 100);
-    if (count($topLines) > 3) {
-        $topSize = 34.0;
-        $topLines = array_slice(quoteWrapText($cleanTop, $fontSerif, $topSize, $canvasW - 100), 0, 4);
-    }
-    $topLineH = (int)round($topSize * 1.35);
-
-    $botSize = 24.0;
-    $botLines = $cleanBot !== '' ? array_slice(quoteWrapText($cleanBot, $fontSans, $botSize, $canvasW - 120), 0, 4) : [];
-    $botLineH = (int)round($botSize * 1.4);
-
-    $textBlockH = (count($topLines) * $topLineH) + (!empty($botLines) ? (22 + count($botLines) * $botLineH) : 0);
-    $canvasH = $padTop + $boxH + 45 + $textBlockH + 55;
-
-    $img = imagecreatetruecolor($canvasW, $canvasH);
-    $black = imagecolorallocate($img, 0, 0, 0);
-    $white = imagecolorallocate($img, 255, 255, 255);
-    $softWhite = imagecolorallocate($img, 232, 232, 232);
-    imagefilledrectangle($img, 0, 0, $canvasW, $canvasH, $black);
-
-    // Белая тонкая двойная рамка вокруг картинки
-    imagerectangle($img, $padX - 8, $padTop - 8, $padX + $boxW + 7, $padTop + $boxH + 7, $white);
-    imagerectangle($img, $padX - 7, $padTop - 7, $padX + $boxW + 6, $padTop + $boxH + 6, $white);
-
-    // Вставляем исходное фото с сохранением пропорций (cover)
-    $srcRatio = $sw / max(1, $sh);
-    $dstRatio = $boxW / max(1, $boxH);
-    if ($srcRatio > $dstRatio) {
-        $cropH = $sh;
-        $cropW = (int)round($sh * $dstRatio);
-        $cropX = (int)floor(($sw - $cropW) / 2);
-        $cropY = 0;
-    } else {
-        $cropW = $sw;
-        $cropH = (int)round($sw / $dstRatio);
-        $cropX = 0;
-        $cropY = (int)floor(($sh - $cropH) / 2);
-    }
-    imagecopyresampled($img, $src, $padX, $padTop, $cropX, $cropY, $boxW, $boxH, $cropW, $cropH);
-    imagedestroy($src);
-
-    // Рисуем верхний текст
-    $curY = $padTop + $boxH + 42 + (int)round($topSize);
-    foreach ($topLines as $line) {
-        $b = imagettfbbox($topSize, 0, $fontSerif, $line);
-        $lw = abs($b[2] - $b[0]);
-        $lx = (int)round(($canvasW - $lw) / 2);
-        imagettftext($img, $topSize, 0, $lx, $curY, $white, $fontSerif, $line);
-        $curY += $topLineH;
-    }
-
-    // Рисуем нижний подзаголовок
-    if (!empty($botLines)) {
-        $curY += 10;
-        foreach ($botLines as $line) {
-            $b = imagettfbbox($botSize, 0, $fontSans, $line);
-            $lw = abs($b[2] - $b[0]);
-            $lx = (int)round(($canvasW - $lw) / 2);
-            imagettftext($img, $botSize, 0, $lx, $curY, $softWhite, $fontSans, $line);
-            $curY += $botLineH;
-        }
-    }
-
-    $outPath = '/tmp/dem_' . getmypid() . '_' . random_int(1000, 999999) . '.jpg';
-    $ok = imagejpeg($img, $outPath, 92);
-    imagedestroy($img);
-    return $ok ? $outPath : null;
-}
-
-/**
- * Извлечение URL наибольшего фото из вложений сообщения (или ответа/пересланного)
- */
-function extractPhotoUrlFromMessage(array $msg): ?string {
-    $sources = [$msg];
-    if (!empty($msg['reply_message'])) $sources[] = $msg['reply_message'];
-    if (!empty($msg['fwd_messages'][0])) $sources[] = $msg['fwd_messages'][0];
-
-    foreach ($sources as $src) {
-        foreach (($src['attachments'] ?? []) as $att) {
-            if (($att['type'] ?? '') === 'photo' && !empty($att['photo']['sizes'])) {
-                $bestUrl = null;
-                $bestArea = -1;
-                foreach ($att['photo']['sizes'] as $sz) {
-                    $area = (int)($sz['width'] ?? 0) * (int)($sz['height'] ?? 0);
-                    if ($area > $bestArea && !empty($sz['url'])) {
-                        $bestArea = $area;
-                        $bestUrl = (string)$sz['url'];
-                    }
-                }
-                if ($bestUrl !== null) return $bestUrl;
+        $uploadUrl = (string)($srv['response']['upload_url'] ?? '');
+        if ($uploadUrl === '') {
+            $code = (int)($srv['error']['error_code'] ?? 0);
+            $msg  = (string)($srv['error']['error_msg'] ?? 'empty upload_url');
+            if ($code === 15 || $code === 27 || $code === 5) {
+                return [
+                    'attachment' => null,
+                    'error' => "У токена сообщества ВК нет права «Фотографии» (код {$code})."
+                ];
             }
+            $lastError = "VK getMessagesUploadServer (код {$code}): {$msg}";
+            usleep(250000 * $attempt);
+            continue;
         }
-    }
-    return null;
-}
 
-/**
- * Генератор визуального паспорта игрока (!паспорт / !карта) в стиле тёмного CRMP UI на PHP GD
- */
-function generatePassportImage(array $info): ?string {
-    if (!extension_loaded('gd') || !function_exists('imagettftext')) {
-        return null;
-    }
+        // 2. Отправляем JPEG на сервер загрузки ВК
+        $ch = curl_init($uploadUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_POST              => true,
+            CURLOPT_POSTFIELDS        => ['photo' => new CURLFile($filePath, 'image/jpeg', 'image.jpg')],
+            CURLOPT_HTTPHEADER        => ['Expect:'],
+            CURLOPT_RETURNTRANSFER    => true,
+            CURLOPT_FOLLOWLOCATION    => true,
+            CURLOPT_CONNECTTIMEOUT    => 4,
+            CURLOPT_TIMEOUT           => 12,
+            CURLOPT_NOSIGNAL          => 1,
+            CURLOPT_IPRESOLVE         => CURL_IPRESOLVE_V4,
+            CURLOPT_SSL_VERIFYPEER    => false,
+            CURLOPT_SSL_VERIFYHOST    => 0,
+            CURLOPT_USERAGENT         => 'RaseRussiaBot',
+        ]);
+        $raw = curl_exec($ch);
+        $curlErr = curl_error($ch);
+        curl_close($ch);
 
-    $fontBold = quoteFindFont([
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-        '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf',
-    ]);
-    $fontReg = quoteFindFont([
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        '/usr/share/fonts/dejavu/DejaVuSans.ttf',
-    ]) ?? $fontBold;
+        if ($raw === false || $raw === '') {
+            $lastError = "Ошибка отправки файла на сервер ВК: {$curlErr}";
+            usleep(250000 * $attempt);
+            continue;
+        }
 
-    if ($fontBold === null) return null;
+        $up = json_decode((string)$raw, true);
+        if (!is_array($up) || empty($up['photo']) || $up['photo'] === '[]' || empty($up['hash']) || !isset($up['server'])) {
+            $lastError = "Сервер ВК отклонил файл изображения.";
+            usleep(250000 * $attempt);
+            continue;
+        }
 
-    $w = 1200;
-    $h = 630;
-    $img = imagecreatetruecolor($w, $h);
-    imagealphablending($img, true);
-    imagesavealpha($img, true);
+        // 3. Сохраняем фото
+        $saved = vkApi('photos.saveMessagesPhoto', [
+            'photo'  => $up['photo'],
+            'server' => $up['server'],
+            'hash'   => $up['hash'],
+        ]);
 
-    // 1. Тёмный премиальный градиентный фон (глубокий фиолетово-графитовый)
-    for ($y = 0; $y < $h; $y++) {
-        $t = $y / ($h - 1);
-        $r = (int)round(22 + 12 * $t);
-        $g = (int)round(14 + 6 * $t);
-        $b = (int)round(36 + 18 * $t);
-        imageline($img, 0, $y, $w, $y, imagecolorallocate($img, $r, $g, $b));
-    }
+        $p = $saved['response'][0] ?? null;
+        if (empty($p['owner_id']) || empty($p['id'])) {
+            $code = (int)($saved['error']['error_code'] ?? 0);
+            $msg  = (string)($saved['error']['error_msg'] ?? 'save failed');
+            $lastError = "VK saveMessagesPhoto (код {$code}): {$msg}";
+            usleep(250000 * $attempt);
+            continue;
+        }
 
-    // Мягкие акценты свечения
-    quoteDrawSoftGlow($img, 180, 140, 320, 120, 28, 165, 14, 121);
-    quoteDrawSoftGlow($img, 1020, 520, 360, 20, 145, 115, 14, 122);
-
-    // 2. Внешняя рамка карточки и полупрозрачная панель
-    $panelBg   = imagecolorallocatealpha($img, 16, 18, 28, 28);
-    $panelEdge = imagecolorallocatealpha($img, 145, 95, 225, 65);
-    $cardBg    = imagecolorallocatealpha($img, 28, 30, 46, 32);
-    $cardEdge  = imagecolorallocatealpha($img, 120, 130, 165, 85);
-    $white     = imagecolorallocate($img, 255, 255, 255);
-    $muted     = imagecolorallocate($img, 168, 175, 198);
-    $accent    = imagecolorallocate($img, 185, 125, 255);
-    $gold      = imagecolorallocate($img, 255, 206, 86);
-    $emerald   = imagecolorallocate($img, 74, 222, 128);
-    $shadow    = imagecolorallocatealpha($img, 0, 0, 0, 70);
-
-    imagefilledrectangle($img, 36, 36, $w - 36, $h - 36, $panelBg);
-    imagerectangle($img, 36, 36, $w - 36, $h - 36, $panelEdge);
-    imagerectangle($img, 37, 37, $w - 37, $h - 37, $panelEdge);
-
-    // 3. Верхняя шапка паспорта
-    imagettftext($img, 15, 0, 66, 78, $accent, $fontBold, "RASE RUSSIA  |  ПАСПОРТ УЧАСТНИКА");
-    $idLabel = "ID: " . (int)($info['vk_id'] ?? 0);
-    $idBox = imagettfbbox(15, 0, $fontBold, $idLabel);
-    $idW = abs($idBox[2] - $idBox[0]);
-    imagettftext($img, 15, 0, $w - 66 - $idW, 78, $muted, $fontBold, $idLabel);
-    imageline($img, 64, 96, $w - 64, 96, $cardEdge);
-
-    // 4. Круглая аватарка слева + декоративное кольцо
-    $avSize = 230;
-    $avX = 78;
-    $avY = 140;
-    $ringCol = !empty($info['is_vip']) ? $gold : $accent;
-    imagefilledellipse($img, $avX + (int)($avSize / 2), $avY + (int)($avSize / 2), $avSize + 12, $avSize + 12, $ringCol);
-
-    $avatarBytes = !empty($info['avatar_url']) ? quoteDownloadBinary((string)$info['avatar_url']) : null;
-    $rawName = (string)($info['name'] ?? 'Игрок');
-    $cleanName = trim(preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', $rawName));
-    if ($cleanName === '') $cleanName = 'Игрок';
-
-    quoteDrawCircularAvatar($img, $avatarBytes, $avX, $avY, $avSize, $cleanName, $fontBold);
-
-    // Бейдж роли под аватаркой
-    $roleText = trim(preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', (string)($info['role'] ?? 'Участник')));
-    if (mb_strlen($roleText) > 22) $roleText = mb_substr($roleText, 0, 21) . '…';
-    imagefilledrectangle($img, 68, 400, 318, 446, $cardBg);
-    imagerectangle($img, 68, 400, 318, 446, $ringCol);
-    $rBox = imagettfbbox(14, 0, $fontBold, $roleText);
-    $rW = abs($rBox[2] - $rBox[0]);
-    imagettftext($img, 14, 0, 68 + (int)((250 - $rW) / 2), 429, $white, $fontBold, $roleText);
-
-    // VIP / Статус под ролью
-    $statusText = !empty($info['is_super']) ? "СУПЕР-ДОСТУП" : (!empty($info['is_vip']) ? "VIP СТАТУС" : "УЧАСТНИК ЧАТА");
-    $statusCol  = (!empty($info['is_super']) || !empty($info['is_vip'])) ? $gold : $muted;
-    $sBox = imagettfbbox(13, 0, $fontBold, $statusText);
-    $sW = abs($sBox[2] - $sBox[0]);
-    imagettftext($img, 13, 0, 68 + (int)((250 - $sW) / 2), 478, $statusCol, $fontBold, $statusText);
-
-    // Дата регистрации внизу слева
-    $regStr = "В беседе с " . (string)($info['reg_date'] ?? date('d.m.Y'));
-    $rgBox = imagettfbbox(12, 0, $fontReg, $regStr);
-    $rgW = abs($rgBox[2] - $rgBox[0]);
-    imagettftext($img, 12, 0, 68 + (int)((250 - $rgW) / 2), 515, $muted, $fontReg, $regStr);
-
-    // 5. Правая колонка: Имя + 6 аккуратных статистических плиток (2 столбца x 3 ряда)
-    $dispName = mb_strlen($cleanName) > 26 ? (mb_substr($cleanName, 0, 25) . '…') : $cleanName;
-    imagettftext($img, 30, 0, 362, 168, $shadow, $fontBold, $dispName);
-    imagettftext($img, 30, 0, 360, 166, $white, $fontBold, $dispName);
-
-    $cleanStr = function (string $val, int $max = 22): string {
-        $v = trim(preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', $val));
-        if ($v === '') return '—';
-        return mb_strlen($v) > $max ? (mb_substr($v, 0, $max - 1) . '…') : $v;
-    };
-
-    $tiles = [
-        ['label' => 'НАЛИЧНЫЕ',   'val' => $cleanStr((string)($info['cash'] ?? '0 ₽'), 20),       'col' => $emerald],
-        ['label' => 'В БАНКЕ',    'val' => $cleanStr((string)($info['bank'] ?? '0 ₽'), 20),       'col' => $emerald],
-        ['label' => 'СЕМЬЯ/КЛАН', 'val' => $cleanStr((string)($info['clan'] ?? 'Нет'), 22),       'col' => $white],
-        ['label' => 'ГРАЖДАНСТВО','val' => $cleanStr((string)($info['country'] ?? 'Нет'), 22),    'col' => $white],
-        ['label' => 'СООБЩЕНИЯ',  'val' => $cleanStr((string)($info['messages'] ?? '0'), 22),     'col' => $accent],
-        ['label' => 'РЕПУТАЦИЯ',  'val' => $cleanStr((string)($info['reputation'] ?? '0'), 20),   'col' => $gold],
-    ];
-
-    $startX = 360;
-    $startY = 200;
-    $tileW = 372;
-    $tileH = 98;
-    $gapX = 24;
-    $gapY = 20;
-
-    foreach ($tiles as $idx => $tile) {
-        $colIdx = $idx % 2;
-        $rowIdx = (int)floor($idx / 2);
-        $tx = $startX + $colIdx * ($tileW + $gapX);
-        $ty = $startY + $rowIdx * ($tileH + $gapY);
-
-        imagefilledrectangle($img, $tx, $ty, $tx + $tileW, $ty + $tileH, $cardBg);
-        imagerectangle($img, $tx, $ty, $tx + $tileW, $ty + $tileH, $cardEdge);
-
-        imagettftext($img, 12, 0, $tx + 20, $ty + 32, $muted, $fontBold, $tile['label']);
-        imagettftext($img, 20, 0, $tx + 20, $ty + 72, $tile['col'], $fontBold, $tile['val']);
+        $att = "photo{$p['owner_id']}_{$p['id']}";
+        if (!empty($p['access_key'])) {
+            $att .= "_{$p['access_key']}";
+        }
+        return ['attachment' => $att, 'error' => null];
     }
 
-    // Нижняя строка: брак
-    $marriage = $cleanStr((string)($info['marriage'] ?? 'Холост / Не замужем'), 46);
-    imagettftext($img, 13, 0, 360, 568, $muted, $fontReg, "Семейное положение: {$marriage}");
-
-    $outPath = '/tmp/pass_' . getmypid() . '_' . random_int(1000, 999999) . '.jpg';
-    $ok = imagejpeg($img, $outPath, 92);
-    imagedestroy($img);
-    return $ok ? $outPath : null;
+    file_put_contents('php://stderr', "[PHOTO UPLOAD FAILED x3] {$lastError}" . PHP_EOL);
+    return ['attachment' => null, 'error' => $lastError];
 }

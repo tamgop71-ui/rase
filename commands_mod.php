@@ -139,8 +139,10 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             }
             if ($err !== null) { sendMessage($peerId, $err); return true; }
 
-            $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active) VALUES (?, ?, ?, 'warn', ?, 1)")
-                ->execute([$peerId, $targetId, $fromId, mb_substr($reason, 0, 250)]);
+            ensureBotSchemaV6($pdo);
+            $issuerPrio = $isSuper ? 999 : $myPriority;
+            $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, actor_priority, type, reason, is_active) VALUES (?, ?, ?, ?, 'warn', ?, 1)")
+                ->execute([$peerId, $targetId, $fromId, $issuerPrio, mb_substr($reason, 0, 250)]);
             $stmtCnt = $pdo->prepare("SELECT COUNT(*) FROM bot_punishments WHERE peer_id = ? AND target_vk_id = ? AND type = 'warn' AND is_active = 1");
             $stmtCnt->execute([$peerId, $targetId]);
             $wCount = (int)$stmtCnt->fetchColumn();
@@ -163,15 +165,53 @@ function handleModAndAdminCommands(PDO $pdo, string $cmd, string $args, int $pee
             return true;
 
         case 'unwarn':
+            ensureBotSchemaV6($pdo);
             $targetId = extractTargetUser($pdo, $peerId, $msg, $args);
             if (!$targetId) { sendMessage($peerId, "⚠️ Использование: !унварн [ID/упоминание]"); return true; }
-            $stmtLast = $pdo->prepare("SELECT id FROM bot_punishments WHERE peer_id = ? AND target_vk_id = ? AND type = 'warn' AND is_active = 1 ORDER BY id DESC LIMIT 1");
+
+            // Запрет снимать предупреждение самому себе (кроме Главных Создателей бота)
+            if ($targetId === $fromId && !isMainOwner($fromId)) {
+                sendMessage($peerId, "⛔ Вы не можете снять предупреждение самому себе!");
+                return true;
+            }
+
+            $stmtLast = $pdo->prepare("SELECT id, actor_vk_id, actor_priority FROM bot_punishments WHERE peer_id = ? AND target_vk_id = ? AND type = 'warn' AND is_active = 1 ORDER BY id DESC LIMIT 1");
             $stmtLast->execute([$peerId, $targetId]);
-            $lastId = $stmtLast->fetchColumn();
-            $tM = formatUserMention($pdo, $peerId, $targetId);
+            $lastWarn = $stmtLast->fetch();
             $tGen = formatUserMention($pdo, $peerId, $targetId, 'gen');
-            if (!$lastId) { sendMessage($peerId, "ℹ️ У {$tGen} нет активных предупреждений."); return true; }
-            $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE id = ?")->execute([$lastId]);
+            if (!$lastWarn) {
+                sendMessage($peerId, "ℹ️ У {$tGen} нет активных предупреждений.");
+                return true;
+            }
+
+            // Проверка иерархии: если варн выдал админ с ролью X (например 60), снять его может только админ с ролью X и выше
+            $issuerId = (int)($lastWarn['actor_vk_id'] ?? 0);
+            $issuerPrio = isset($lastWarn['actor_priority']) && $lastWarn['actor_priority'] !== null
+                ? (int)$lastWarn['actor_priority']
+                : null;
+
+            if ($issuerPrio === null && $issuerId > 0) {
+                if (hasSuperAccess($pdo, $issuerId)) {
+                    $issuerPrio = 999;
+                } else {
+                    $stIP = $pdo->prepare("SELECT role_priority FROM bot_chat_members WHERE peer_id = ? AND vk_id = ?");
+                    $stIP->execute([$peerId, $issuerId]);
+                    $issuerPrio = (int)$stIP->fetchColumn();
+                }
+            }
+            $issuerPrio = (int)($issuerPrio ?? 0);
+
+            if ($issuerPrio >= 999 && !$isSuper) {
+                sendMessage($peerId, "⛔ Это предупреждение выдал пользователь с супер-доступом. Снять его может только супер-доступ.");
+                return true;
+            }
+            if (!$isSuper && $issuerPrio > 0 && $myPriority < $issuerPrio) {
+                $issRoleName = getRoleName($pdo, $peerId, $issuerPrio);
+                sendMessage($peerId, "⛔ Недостаточно прав для снятия этого предупреждения!\n👮 Его выдал администратор уровня «{$issRoleName}» ({$issuerPrio}). Снять может только роль {$issuerPrio} и выше.");
+                return true;
+            }
+
+            $pdo->prepare("UPDATE bot_punishments SET is_active = 0 WHERE id = ?")->execute([(int)$lastWarn['id']]);
             $aM = formatUserMention($pdo, $peerId, $fromId);
             sendMessage($peerId, "✅ {$aM} снял(а) предупреждение с {$tGen}");
             return true;

@@ -578,6 +578,43 @@ function extractTargetUser(PDO $pdo, int $peerId, array $msg, string &$args): ?i
 /**
  * Сброс никнейма и роли участника при выходе или кике из беседы
  */
+
+/**
+ * Авто-миграция схемы БД (выполняется 1 раз за жизнь контейнера, 0 мс после первого запуска)
+ */
+function ensureBotSchemaV6(PDO $pdo): void {
+    static $checked = false;
+    if ($checked) return;
+    $flag = '/tmp/schema_v6_migrated.flag';
+    if (is_file($flag)) {
+        $checked = true;
+        return;
+    }
+    try {
+        $col = $pdo->query("SHOW COLUMNS FROM bot_punishments LIKE 'actor_priority'")->fetch();
+        if (!$col) {
+            $pdo->exec("ALTER TABLE bot_punishments ADD COLUMN actor_priority INT UNSIGNED DEFAULT NULL AFTER actor_vk_id");
+        }
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS `bot_slaves` (
+                `slave_vk_id` BIGINT UNSIGNED NOT NULL,
+                `owner_vk_id` BIGINT UNSIGNED NOT NULL,
+                `price` BIGINT UNSIGNED NOT NULL DEFAULT 5000,
+                `purchases_count` INT UNSIGNED NOT NULL DEFAULT 1,
+                `chained_until` DATETIME DEFAULT NULL,
+                `last_collect_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `bought_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`slave_vk_id`),
+                KEY `idx_owner` (`owner_vk_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+        @file_put_contents($flag, '1');
+        $checked = true;
+    } catch (Throwable $e) {
+        file_put_contents('php://stderr', "[SCHEMA V6] " . $e->getMessage() . PHP_EOL);
+    }
+}
+
 function resetMemberOnLeave(PDO $pdo, int $peerId, int $vkId): void {
     if ($peerId <= 2000000000 || $vkId <= 0) return;
     $pdo->prepare("UPDATE bot_chat_members SET nickname = NULL, role_priority = 0, temp_role_until = NULL WHERE peer_id = ? AND vk_id = ?")
@@ -851,7 +888,8 @@ function executeApprovedSuperAction(PDO $pdo, array $req, int $approverId): stri
             return "Мут {$uTarget} на {$mins} мин. выполнен.";
 
         case 'warn':
-            $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, type, reason, is_active) VALUES (?, ?, ?, 'warn', ?, 1)")
+            ensureBotSchemaV6($pdo);
+            $pdo->prepare("INSERT INTO bot_punishments (peer_id, target_vk_id, actor_vk_id, actor_priority, type, reason, is_active) VALUES (?, ?, ?, 999, 'warn', ?, 1)")
                 ->execute([$peerId, $targetId, $actorId, $reason]);
             sendMessage($peerId, "⚠️ {$uActor} выдал(а) предупреждение {$uTargetDat} (одобрено Создателем)\n👑 Одобрил: {$uOwner}\n📝 Причина: {$reason}");
             return "Варн {$uTarget} выдан.";
