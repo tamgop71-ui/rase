@@ -28,6 +28,9 @@ while (true) {
         $pdo = getDB();
         ensureBotSchemaV6($pdo);
 
+        // 0.0. Пакетный сброс счётчиков активности из /tmp/stats_queue.jsonl (1 транзакция раз в 15 сек)
+        flushStatsQueueToDb($pdo);
+
         // 0. Таймеры фаз активных игр «Мафия» (0 SQL и 0 require, если игр нет)
         if (glob('/tmp/mafia_2*.json')) {
             require_once __DIR__ . '/games_party.php';

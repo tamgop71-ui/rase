@@ -36,47 +36,54 @@ define('DB_PASS', trim((string)(getenv('DB_PASS') ?: '')));
  */
 function getDB(bool $forceReconnect = false): PDO {
     static $pdo = null;
-    static $createdAt = 0;
+    static $lastUsedAt = 0;
 
+    $now = time();
     if ($forceReconnect) {
         $pdo = null;
     }
 
-    // В рамках одного запроса или короткого тика переиспользуем открытый PDO;
-    // в CLI-демоне (worker.php) перепроверяем соединение, если прошло > 20 сек.
+    // Переиспользуем постоянное соединение; проверяем SELECT 1 только после долгого простоя
     if ($pdo !== null) {
-        if (PHP_SAPI === 'cli' && (time() - $createdAt) >= 20) {
+        $idleLimit = (PHP_SAPI === 'cli') ? 25 : 45;
+        if (($now - $lastUsedAt) >= $idleLimit) {
             try {
                 $pdo->query('SELECT 1');
-                $createdAt = time();
+                $lastUsedAt = $now;
                 return $pdo;
             } catch (Throwable $e) {
                 $pdo = null;
             }
         } else {
+            $lastUsedAt = $now;
             return $pdo;
         }
     }
 
     $dsn = sprintf("mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4", DB_HOST, DB_PORT, DB_NAME);
-    // ATTR_PERSISTENT => false + mysqlnd.net_read_timeout=5 полностью исключают зависание на мёртвом TCP-сокете
+    // Постоянное соединение (PDO::ATTR_PERSISTENT) убирает повторное TCP/SSL-рукопожатие (экономия 30-80 мс);
+    // при принудительном переподключении после обрыва открываем свежий сокет (false), чтобы гарантированно обойти мёртвый хендл.
+    $usePersistent = !$forceReconnect && DB_PERSISTENT;
     $options = [
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES   => false,
         PDO::ATTR_TIMEOUT            => 3,
-        PDO::ATTR_PERSISTENT         => false,
+        PDO::ATTR_PERSISTENT         => $usePersistent,
     ];
 
     $lastErr = null;
     for ($attempt = 1; $attempt <= 2; $attempt++) {
         try {
+            if ($attempt === 2) {
+                $options[PDO::ATTR_PERSISTENT] = false;
+            }
             $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
-            $createdAt = time();
+            $lastUsedAt = time();
             return $pdo;
         } catch (PDOException $e) {
             $lastErr = $e;
-            usleep(120000);
+            usleep(100000);
         }
     }
 
