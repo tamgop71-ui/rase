@@ -92,7 +92,6 @@ function refreshChatTitle(PDO $pdo, int $peerId): string {
     if ($title !== '') {
         $title = mb_substr($title, 0, 120);
         $pdo->prepare("UPDATE bot_chats SET title = ? WHERE peer_id = ?")->execute([$title, $peerId]);
-        clearChatCache($peerId);
         return $title;
     }
     return "Беседа #{$peerId}";
@@ -136,7 +135,6 @@ function syncChatMembers(PDO $pdo, int $peerId): array {
         $prio = !empty($item['is_owner']) ? 100 : (!empty($item['is_admin']) ? 60 : 0);
         if (!empty($item['is_owner'])) {
             $stOwn->execute([$mid, $peerId]);
-                clearChatCache($peerId);
         }
         $stMem->execute([$peerId, $mid, $prio]);
         $synced++;
@@ -196,207 +194,40 @@ function buildDailyReportText(PDO $pdo, int $peerId): string {
     return implode("\n", $lines);
 }
 
-
-/**
- * Кэш настроек беседы (bot_chats) в RAM + /tmp на 30 сек.
- * Снижает нагрузку на удалённую MySQL в активных чатах в 3–4 раза.
- */
-function getChatCache(int $peerId): ?array {
-    $c = cacheGet("chat_{$peerId}", 30);
-    return is_array($c) ? $c : null;
-}
-
-function setChatCache(int $peerId, array $chat): void {
-    if ($peerId <= 0) return;
-    cacheSet("chat_{$peerId}", $chat);
-}
-
-function clearChatCache(int $peerId): void {
-    if ($peerId <= 0) return;
-    cacheDel("chat_{$peerId}");
-}
-
-function clearAllChatsCache(): void {
-    if (!empty($GLOBALS['_ram_cache'])) {
-        foreach (array_keys($GLOBALS['_ram_cache']) as $k) {
-            if (str_starts_with((string)$k, 'chat_')) {
-                unset($GLOBALS['_ram_cache'][$k]);
-            }
-        }
-    }
-    $list = glob('/tmp/botc_*.json');
-    if ($list) {
-        foreach ($list as $f) {
-            @unlink($f);
-        }
-    }
-}
-
-/**
- * Постановка счётчиков активности в локальную очередь /tmp (0 SQL и 0 блокировок MySQL на обычных сообщениях).
- * Файл пакетно сбрасывается в БД фоновым воркером worker.php каждые 15 секунд.
- */
-function enqueuePendingStats(array &$ctx): void {
-    $ps = $ctx['pending_stats'] ?? null;
-    if (!is_array($ps)) return;
-    $ctx['pending_stats'] = null;
-    @file_put_contents('/tmp/stats_queue.jsonl', json_encode($ps) . "\n", FILE_APPEND);
-}
-
-/**
- * Пакетный сброс накопленной статистики из /tmp/stats_queue.jsonl в MySQL (вызывается из worker.php каждые 15 сек)
- */
-function flushStatsQueueToDb(PDO $pdo): int {
-    $qFile = '/tmp/stats_queue.jsonl';
-    if (!is_file($qFile) || (int)@filesize($qFile) === 0) {
-        return 0;
-    }
-    $procFile = '/tmp/stats_queue.proc.' . getmypid();
-    if (!@rename($qFile, $procFile)) {
-        return 0;
-    }
-
-    $lines = @file($procFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-    if (!$lines) {
-        @unlink($procFile);
-        return 0;
-    }
-
-    $uAgg = [];
-    $cAgg = [];
-    $mAgg = [];
-
-    foreach ($lines as $ln) {
-        $ps = json_decode($ln, true);
-        if (!is_array($ps) || empty($ps['vk_id']) || empty($ps['peer_id'])) continue;
-        $uid = (int)$ps['vk_id'];
-        $pid = (int)$ps['peer_id'];
-        $ch  = (int)($ps['char_len'] ?? 0);
-        $st  = (int)($ps['sticker_inc'] ?? 0);
-        $sd  = !empty($ps['same_day']);
-        $td  = (string)($ps['today'] ?? date('Y-m-d'));
-
-        if (!isset($uAgg[$uid])) {
-            $uAgg[$uid] = ['msgs' => 0, 'chars' => 0, 'stickers' => 0, 'reset_day' => false, 'today' => $td];
-        }
-        $uAgg[$uid]['msgs']++;
-        $uAgg[$uid]['chars'] += $ch;
-        $uAgg[$uid]['stickers'] += $st;
-        if (!$sd) $uAgg[$uid]['reset_day'] = true;
-        $uAgg[$uid]['today'] = $td;
-
-        $cAgg[$pid] = ($cAgg[$pid] ?? 0) + 1;
-
-        $mk = "{$pid}:{$uid}";
-        if (!isset($mAgg[$mk])) {
-            $mAgg[$mk] = ['peer_id' => $pid, 'vk_id' => $uid, 'msgs' => 0, 'chars' => 0, 'stickers' => 0];
-        }
-        $mAgg[$mk]['msgs']++;
-        $mAgg[$mk]['chars'] += $ch;
-        $mAgg[$mk]['stickers'] += $st;
-    }
-
-    $count = count($lines);
-    try {
-        $pdo->beginTransaction();
-
-        $stUSame = $pdo->prepare("UPDATE bot_users SET total_messages = total_messages + ?, total_chars = total_chars + ?, total_stickers = total_stickers + ?, daily_msgs = daily_msgs + ? WHERE vk_id = ?");
-        $stUNew  = $pdo->prepare("UPDATE bot_users SET total_messages = total_messages + ?, total_chars = total_chars + ?, total_stickers = total_stickers + ?, daily_msgs = ?, daily_games = 0, daily_date = ?, quest_claimed = 0 WHERE vk_id = ?");
-        foreach ($uAgg as $uid => $u) {
-            if ($u['reset_day']) {
-                $stUNew->execute([$u['msgs'], $u['chars'], $u['stickers'], $u['msgs'], $u['today'], $uid]);
-            } else {
-                $stUSame->execute([$u['msgs'], $u['chars'], $u['stickers'], $u['msgs'], $uid]);
-            }
-        }
-
-        $stC = $pdo->prepare("UPDATE bot_chats SET total_messages = total_messages + ? WHERE peer_id = ?");
-        foreach ($cAgg as $pid => $cnt) {
-            $stC->execute([$cnt, $pid]);
-        }
-
-        $stM = $pdo->prepare("UPDATE bot_chat_members SET messages_count = messages_count + ?, chars_count = chars_count + ?, stickers_count = stickers_count + ?, last_active_at = NOW() WHERE peer_id = ? AND vk_id = ?");
-        foreach ($mAgg as $m) {
-            $stM->execute([$m['msgs'], $m['chars'], $m['stickers'], $m['peer_id'], $m['vk_id']]);
-        }
-
-        $pdo->commit();
-        @unlink($procFile);
-        return $count;
-    } catch (Throwable $e) {
-        if ($pdo->inTransaction()) {
-            try { $pdo->rollBack(); } catch (Throwable $ignore) {}
-        }
-        @file_put_contents($qFile, implode("\n", $lines) . "\n", FILE_APPEND);
-        @unlink($procFile);
-        throw $e;
-    }
-}
-
 function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = '', bool $hasSticker = false, bool $deferStatsUpdate = false): array {
     $charLen = mb_strlen($text);
     $stickerInc = $hasSticker ? 1 : 0;
     $hasActivity = ($text !== '' || $hasSticker);
     $today = date('Y-m-d');
 
-    $cachedChat = getChatCache($peerId);
-
-    if ($cachedChat !== null) {
-        // Облегчённый запрос без LEFT JOIN bot_chats (настройки беседы взяты из RAM/tmp кэша за 0 мс!)
-        $stmt = $pdo->prepare("
-            SELECT
-                u.vk_id AS u_exists, u.first_name, u.last_name, u.balance, u.bank_balance,
-                u.country_id, u.clan_id, u.spouse_vk_id, u.marriage_date, u.last_bonus, u.last_work, u.last_rob,
-                u.rob_shield_until, u.daily_given_amount, u.daily_given_date, u.is_superadmin, u.is_bot_banned, u.is_vip, u.reputation,
-                u.afk_reason, u.afk_since, u.daily_msgs, u.daily_games, u.daily_date, u.quest_claimed,
-                u.total_messages, u.total_chars, u.total_stickers,
-                m.vk_id AS m_exists, m.nickname, m.emoji, m.role_priority, m.gm_granted_by, m.gm_min_priority,
-                m.mention_opt_in, m.invited_by, m.temp_role_until, m.vacation_until, m.vacation_reason, m.messages_count, m.chars_count, m.stickers_count, m.joined_at, m.last_active_at,
-                (SELECT 1 FROM bot_punishments p
-                 WHERE p.peer_id = q.req_peer AND p.target_vk_id = q.req_vk AND p.type = 'mute'
-                   AND p.is_active = 1 AND (p.expires_at IS NULL OR p.expires_at > NOW())
-                 LIMIT 1) AS is_muted,
-                (SELECT p2.reason FROM bot_punishments p2
-                 WHERE p2.peer_id = 0 AND p2.target_vk_id = q.req_vk AND p2.type = 'gban'
-                   AND p2.is_active = 1 AND (p2.expires_at IS NULL OR p2.expires_at > NOW())
-                 LIMIT 1) AS sysban_reason
-            FROM (SELECT ? AS req_vk, ? AS req_peer) q
-            LEFT JOIN bot_users u ON u.vk_id = q.req_vk
-            LEFT JOIN bot_chat_members m ON m.peer_id = q.req_peer AND m.vk_id = q.req_vk
-        ");
-        $stmt->execute([$vkId, $peerId]);
-        $row = $stmt->fetch() ?: [];
-        $row['c_exists'] = $peerId;
-    } else {
-        $stmt = $pdo->prepare("
-            SELECT
-                u.vk_id AS u_exists, u.first_name, u.last_name, u.balance, u.bank_balance,
-                u.country_id, u.clan_id, u.spouse_vk_id, u.marriage_date, u.last_bonus, u.last_work, u.last_rob,
-                u.rob_shield_until, u.daily_given_amount, u.daily_given_date, u.is_superadmin, u.is_bot_banned, u.is_vip, u.reputation,
-                u.afk_reason, u.afk_since, u.daily_msgs, u.daily_games, u.daily_date, u.quest_claimed,
-                u.total_messages, u.total_chars, u.total_stickers,
-                c.peer_id AS c_exists, c.title, c.owner_vk_id, c.unity_id, c.rules_text, c.welcome_text,
-                c.games_enabled, c.silence_until, c.silence_action, c.automod_enabled, c.antiflood_enabled,
-                c.antidrain_enabled, c.antiraid_enabled, c.anticaps_enabled, c.antisticker_enabled, c.autosync_enabled, c.ai_enabled, c.daily_report_time, c.slowmode_sec, c.mentions_enabled,
-                c.listen_target_vk_id, c.listen_until, c.total_messages AS chat_total_messages,
-                m.vk_id AS m_exists, m.nickname, m.emoji, m.role_priority, m.gm_granted_by, m.gm_min_priority,
-                m.mention_opt_in, m.invited_by, m.temp_role_until, m.vacation_until, m.vacation_reason, m.messages_count, m.chars_count, m.stickers_count, m.joined_at, m.last_active_at,
-                (SELECT 1 FROM bot_punishments p
-                 WHERE p.peer_id = q.req_peer AND p.target_vk_id = q.req_vk AND p.type = 'mute'
-                   AND p.is_active = 1 AND (p.expires_at IS NULL OR p.expires_at > NOW())
-                 LIMIT 1) AS is_muted,
-                (SELECT p2.reason FROM bot_punishments p2
-                 WHERE p2.peer_id = 0 AND p2.target_vk_id = q.req_vk AND p2.type = 'gban'
-                   AND p2.is_active = 1 AND (p2.expires_at IS NULL OR p2.expires_at > NOW())
-                 LIMIT 1) AS sysban_reason
-            FROM (SELECT ? AS req_vk, ? AS req_peer) q
-            LEFT JOIN bot_users u ON u.vk_id = q.req_vk
-            LEFT JOIN bot_chats c ON c.peer_id = q.req_peer
-            LEFT JOIN bot_chat_members m ON m.peer_id = q.req_peer AND m.vk_id = q.req_vk
-        ");
-        $stmt->execute([$vkId, $peerId]);
-        $row = $stmt->fetch() ?: [];
-    }
+    $stmt = $pdo->prepare("
+        SELECT
+            u.vk_id AS u_exists, u.first_name, u.last_name, u.balance, u.bank_balance,
+            u.country_id, u.clan_id, u.spouse_vk_id, u.marriage_date, u.last_bonus, u.last_work, u.last_rob,
+            u.rob_shield_until, u.daily_given_amount, u.daily_given_date, u.is_superadmin, u.is_bot_banned, u.is_vip, u.reputation,
+            u.afk_reason, u.afk_since, u.daily_msgs, u.daily_games, u.daily_date, u.quest_claimed,
+            u.total_messages, u.total_chars, u.total_stickers,
+            c.peer_id AS c_exists, c.title, c.owner_vk_id, c.unity_id, c.rules_text, c.welcome_text,
+            c.games_enabled, c.silence_until, c.silence_action, c.automod_enabled, c.antiflood_enabled,
+            c.antidrain_enabled, c.antiraid_enabled, c.anticaps_enabled, c.antisticker_enabled, c.autosync_enabled, c.ai_enabled, c.daily_report_time, c.slowmode_sec, c.mentions_enabled,
+            c.listen_target_vk_id, c.listen_until, c.total_messages AS chat_total_messages,
+            m.vk_id AS m_exists, m.nickname, m.emoji, m.role_priority, m.gm_granted_by, m.gm_min_priority,
+            m.mention_opt_in, m.invited_by, m.temp_role_until, m.vacation_until, m.vacation_reason, m.messages_count, m.chars_count, m.stickers_count, m.joined_at, m.last_active_at,
+            (SELECT 1 FROM bot_punishments p
+             WHERE p.peer_id = q.req_peer AND p.target_vk_id = q.req_vk AND p.type = 'mute'
+               AND p.is_active = 1 AND (p.expires_at IS NULL OR p.expires_at > NOW())
+             LIMIT 1) AS is_muted,
+            (SELECT p2.reason FROM bot_punishments p2
+             WHERE p2.peer_id = 0 AND p2.target_vk_id = q.req_vk AND p2.type = 'gban'
+               AND p2.is_active = 1 AND (p2.expires_at IS NULL OR p2.expires_at > NOW())
+             LIMIT 1) AS sysban_reason
+        FROM (SELECT ? AS req_vk, ? AS req_peer) q
+        LEFT JOIN bot_users u ON u.vk_id = q.req_vk
+        LEFT JOIN bot_chats c ON c.peer_id = q.req_peer
+        LEFT JOIN bot_chat_members m ON m.peer_id = q.req_peer AND m.vk_id = q.req_vk
+    ");
+    $stmt->execute([$vkId, $peerId]);
+    $row = $stmt->fetch() ?: [];
 
     $needRefetch = false;
 
@@ -486,39 +317,31 @@ function ensureUserAndMember(PDO $pdo, int $peerId, int $vkId, string $text = ''
         'total_stickers'     => (int)($row['total_stickers'] ?? 0) + ($hasActivity && !$needRefetch ? $stickerInc : 0),
     ];
 
-    if ($cachedChat !== null) {
-        $chat = $cachedChat;
-        if ($hasActivity && !$needRefetch) {
-            $chat['total_messages'] = (int)($chat['total_messages'] ?? 1) + 1;
-        }
-    } else {
-        $chat = [
-            'peer_id'             => $peerId,
-            'title'               => $row['title'] ?? "Беседа #{$peerId}",
-            'owner_vk_id'         => (int)($row['owner_vk_id'] ?? 0),
-            'unity_id'            => $row['unity_id'] ?? null,
-            'rules_text'          => $row['rules_text'] ?? null,
-            'welcome_text'        => $row['welcome_text'] ?? null,
-            'games_enabled'       => (int)($row['games_enabled'] ?? 1),
-            'silence_until'       => $row['silence_until'] ?? null,
-            'silence_action'      => $row['silence_action'] ?? 'delete',
-            'automod_enabled'     => (int)($row['automod_enabled'] ?? 0),
-            'antiflood_enabled'   => (int)($row['antiflood_enabled'] ?? 0),
-            'antidrain_enabled'   => (int)($row['antidrain_enabled'] ?? 0),
-            'antiraid_enabled'    => (int)($row['antiraid_enabled'] ?? 0),
-            'anticaps_enabled'    => (int)($row['anticaps_enabled'] ?? 0),
-            'antisticker_enabled' => (int)($row['antisticker_enabled'] ?? 0),
-            'autosync_enabled'    => (int)($row['autosync_enabled'] ?? 1),
-            'ai_enabled'          => (int)($row['ai_enabled'] ?? 1),
-            'daily_report_time'   => $row['daily_report_time'] ?? null,
-            'slowmode_sec'        => (int)($row['slowmode_sec'] ?? 0),
-            'mentions_enabled'    => (int)($row['mentions_enabled'] ?? 1),
-            'listen_target_vk_id' => $row['listen_target_vk_id'] ?? null,
-            'listen_until'        => $row['listen_until'] ?? null,
-            'total_messages'      => (int)($row['chat_total_messages'] ?? 1),
-        ];
-        setChatCache($peerId, $chat);
-    }
+    $chat = [
+        'peer_id'             => $peerId,
+        'title'               => $row['title'] ?? "Беседа #{$peerId}",
+        'owner_vk_id'         => (int)($row['owner_vk_id'] ?? 0),
+        'unity_id'            => $row['unity_id'] ?? null,
+        'rules_text'          => $row['rules_text'] ?? null,
+        'welcome_text'        => $row['welcome_text'] ?? null,
+        'games_enabled'       => (int)($row['games_enabled'] ?? 1),
+        'silence_until'       => $row['silence_until'] ?? null,
+        'silence_action'      => $row['silence_action'] ?? 'delete',
+        'automod_enabled'     => (int)($row['automod_enabled'] ?? 0),
+        'antiflood_enabled'   => (int)($row['antiflood_enabled'] ?? 0),
+        'antidrain_enabled'   => (int)($row['antidrain_enabled'] ?? 0),
+        'antiraid_enabled'    => (int)($row['antiraid_enabled'] ?? 0),
+        'anticaps_enabled'    => (int)($row['anticaps_enabled'] ?? 0),
+        'antisticker_enabled' => (int)($row['antisticker_enabled'] ?? 0),
+        'autosync_enabled'    => (int)($row['autosync_enabled'] ?? 1),
+        'ai_enabled'          => (int)($row['ai_enabled'] ?? 1),
+        'daily_report_time'   => $row['daily_report_time'] ?? null,
+        'slowmode_sec'        => (int)($row['slowmode_sec'] ?? 0),
+        'mentions_enabled'    => (int)($row['mentions_enabled'] ?? 1),
+        'listen_target_vk_id' => $row['listen_target_vk_id'] ?? null,
+        'listen_until'        => $row['listen_until'] ?? null,
+        'total_messages'      => (int)($row['chat_total_messages'] ?? 1),
+    ];
 
     $member = [
         'peer_id'         => $peerId,

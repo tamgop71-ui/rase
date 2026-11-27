@@ -104,7 +104,6 @@ if ($data['type'] === 'message_new') {
                 $newTitle = mb_substr(trim((string)$msg['action']['text']), 0, 120);
                 if ($newTitle !== '') {
                     $pdo->prepare("UPDATE bot_chats SET title = ? WHERE peer_id = ?")->execute([$newTitle, $peerId]);
-                    clearChatCache($peerId);
                 }
                 exit('ok');
             }
@@ -137,7 +136,6 @@ if ($data['type'] === 'message_new') {
 
                     if (!empty($item['is_owner'])) {
                         $pdo->prepare("UPDATE bot_chats SET owner_vk_id = ? WHERE peer_id = ?")->execute([$mid, $peerId]);
-                        clearChatCache($peerId);
                         $pdo->prepare("INSERT INTO bot_chat_members (peer_id, vk_id, role_priority) VALUES (?, ?, 100) ON DUPLICATE KEY UPDATE role_priority = 100")->execute([$peerId, $mid]);
                         $ownerAssigned = true;
                     } elseif (!empty($item['is_admin'])) {
@@ -376,7 +374,7 @@ if ($data['type'] === 'message_new') {
             }
             require_once __DIR__ . '/commands.php';
             executeCommand($pdo, mb_strtolower($matches[2]), trim($matches[3] ?? ''), $peerId, $fromId, $ctx, $msg, $matches[1]);
-            enqueuePendingStats($ctx);
+            flushPendingStats($pdo, $ctx);
             require_once __DIR__ . '/telemetry.php';
             recordTelemetryEvent($peerId, $text, $msg['attachments'] ?? [], true);
             exit('ok');
@@ -407,7 +405,7 @@ if ($data['type'] === 'message_new') {
         if ($peerId > 2000000000 && $text !== '' && is_file("/tmp/croco_{$peerId}.json")) {
             require_once __DIR__ . '/games_party.php';
             if (checkCrocodileGuess($pdo, $peerId, $fromId, $text)) {
-                enqueuePendingStats($ctx);
+                flushPendingStats($pdo, $ctx);
                 exit('ok');
             }
         }
@@ -424,7 +422,7 @@ if ($data['type'] === 'message_new') {
             }
         }
 
-        enqueuePendingStats($ctx);
+        flushPendingStats($pdo, $ctx);
         require_once __DIR__ . '/telemetry.php';
         recordTelemetryEvent($peerId, $text, $msg['attachments'] ?? [], $isCmdEvent);
     } catch (Throwable $e) {
