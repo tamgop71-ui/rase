@@ -10,6 +10,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 // Конфигурация VK и внешней БД через переменные окружения
+define('VK_USER_TOKEN', trim((string)(getenv('VK_USER_TOKEN') ?: '')));
 define('VK_GROUP_TOKEN', trim((string)(getenv('VK_GROUP_TOKEN') ?: '')));
 define('VK_CONFIRMATION_TOKEN', trim((string)(getenv('VK_CONFIRMATION_TOKEN') ?: '')));
 define('VK_SECRET_KEY', trim((string)(getenv('VK_SECRET_KEY') ?: '')));
@@ -250,6 +251,41 @@ function vkApi(string $method, array $params = []): array {
 /**
  * Параллельный вызов VK API через curl_multi (до 10 запросов одновременно)
  */
+
+/**
+ * Вызов VK API от имени пользовательского токена (VK_USER_TOKEN) — для методов вроде store.getProducts (!стикеры)
+ */
+function vkUserApi(string $method, array $params = []): array {
+    if (VK_USER_TOKEN === '') {
+        return ['error' => ['error_code' => 5, 'error_msg' => 'VK_USER_TOKEN is not set']];
+    }
+    $params['access_token'] = VK_USER_TOKEN;
+    $params['v'] = VK_API_VERSION;
+    $url = 'https://api.vk.com/method/' . $method;
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_POST              => true,
+        CURLOPT_POSTFIELDS        => http_build_query($params),
+        CURLOPT_RETURNTRANSFER    => true,
+        CURLOPT_CONNECTTIMEOUT    => 2,
+        CURLOPT_TIMEOUT           => 6,
+        CURLOPT_NOSIGNAL          => 1,
+        CURLOPT_TCP_NODELAY       => 1,
+        CURLOPT_DNS_CACHE_TIMEOUT => 3600,
+        CURLOPT_IPRESOLVE         => CURL_IPRESOLVE_V4,
+        CURLOPT_HTTP_VERSION      => CURL_HTTP_VERSION_2_0,
+        CURLOPT_ENCODING          => '',
+        CURLOPT_USERAGENT         => 'KateMobileAndroid/56 lite-460 (Android 4.4.2; SDK 19; x86; unknown Android SDK built for x86; en)',
+    ]);
+    $res = curl_exec($ch);
+    curl_close($ch);
+    if ($res === false) {
+        return ['error' => ['error_code' => -1, 'error_msg' => 'Network error']];
+    }
+    return json_decode((string)$res, true) ?? [];
+}
+
 function vkApiMulti(array $calls, int $concurrency = 10): array {
     if (empty($calls)) return [];
     $results = [];

@@ -869,9 +869,8 @@ function handleFunAndGeneralCommands(PDO $pdo, string $cmd, string $args, int $p
             return true;
 
         case 'stickers':
-            $targetId = extractTargetUser($pdo, $peerId, $msg, $args) ?? $fromId;
-            $tCtx = ($targetId === $fromId) ? $ctx : ensureUserAndMember($pdo, $peerId, $targetId);
-            sendMessage($peerId, "🎭 Стикеры " . formatUserMention($pdo, $peerId, $targetId, 'gen') . ":\n• В беседе: {$tCtx['member']['stickers_count']} шт.\n• Всего: {$tCtx['global']['total_stickers']} шт.");
+            require_once __DIR__ . '/stickers_info.php';
+            handleStickersCommand($pdo, $peerId, $fromId, $args, $msg, $ctx, $isSuper);
             return true;
 
         case 'emoji':
